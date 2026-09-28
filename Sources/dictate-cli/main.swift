@@ -262,6 +262,22 @@ do {
                 .filter { $0.hasDirectoryPath }.sorted { $0.lastPathComponent < $1.lastPathComponent }
         }
         let streamRoot = option("--stream-root").map { URL(fileURLWithPath: $0) }
+        if kind == .parakeet, let sr = streamRoot {
+            // L5 for Parakeet: our exact buffered algorithm (Stage A) on the golden audio vs NeMo's buffered run.
+            let model = try NemotronModel(modelDir: modelDir, kind: .parakeet, precision: option("--precision", "f32")!)
+            var exact = 0, total = 0
+            for d in dirs {
+                let sd = sr.appendingPathComponent(d.lastPathComponent)
+                guard let refText = try? String(contentsOf: sd.appendingPathComponent("transcript.txt"), encoding: .utf8) else { continue }
+                let audio = try NPYArray.load(d.appendingPathComponent("audio.npy")).floats()
+                let st = ParakeetStream(model: model); st.runBuffered(audio: audio)
+                total += 1
+                let ref = refText.trimmingCharacters(in: .whitespacesAndNewlines)
+                if st.text == ref { exact += 1 } else { print("\(d.lastPathComponent):\n  ours: \(st.text)\n  ref:  \(ref)") }
+            }
+            print("L5 Parakeet exact buffered vs NeMo buffered: transcript exact \(exact)/\(total)")
+            break
+        }
         let verbose = args.contains("-v") || dirs.count == 1
         var worst: [String: LadderRow] = [:]
         var order = [String]()
