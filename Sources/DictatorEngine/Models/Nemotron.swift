@@ -1,7 +1,23 @@
 import Foundation
 
-/// Nemotron Speech Streaming English 0.6B: cache-aware FastConformer + RNN-T.
+/// The two NeMo FastConformer + RNN-T models we run.
+public enum NemoModelKind: String {
+    case nemotron, parakeet
+
+    public var dirName: String {
+        switch self {
+        case .nemotron: return "nemotron-speech-streaming-en-0.6b"
+        case .parakeet: return "parakeet-unified-en-0.6b"
+        }
+    }
+    public var config: FastConformerConfig { self == .nemotron ? .nemotron : .parakeet }
+    /// Parakeet normalizes mel features per bin (`per_feature`); Nemotron does not.
+    public var perFeatureNormalize: Bool { self == .parakeet }
+}
+
+/// A NeMo FastConformer + RNN-T model (Nemotron Speech Streaming or Parakeet Unified).
 public final class NemotronModel {
+    public let kind: NemoModelKind
     public let encoder: FastConformerEncoder
     public let decoder: RNNTDecoder
     public let frontend: NemoMelFrontend
@@ -9,10 +25,18 @@ public final class NemotronModel {
     let jointEncW: Tensor, jointEncB: Tensor
     let weights: SafeTensorsFile
 
-    public init(modelDir: URL) throws {
+    /// Weight file for a precision: fp32 is the extracted NeMo checkpoint; others are produced by
+    /// `dictate-cli convert`.
+    public static func weightsURL(modelDir: URL, precision: String) -> URL {
+        precision == "f32" ? modelDir.appendingPathComponent("nemo_extracted/weights.safetensors")
+                           : modelDir.appendingPathComponent("dictator-\(precision).safetensors")
+    }
+
+    public init(modelDir: URL, kind: NemoModelKind = .nemotron, precision: String = "f32") throws {
+        self.kind = kind
         let dir = modelDir.appendingPathComponent("nemo_extracted")
-        weights = try SafeTensorsFile(dir.appendingPathComponent("weights.safetensors"))
-        encoder = try FastConformerEncoder(weights: weights, config: .nemotron)
+        weights = try SafeTensorsFile(NemotronModel.weightsURL(modelDir: modelDir, precision: precision))
+        encoder = try FastConformerEncoder(weights: weights, config: kind.config)
         decoder = try RNNTDecoder(weights: weights)
         frontend = NemoMelFrontend(filterbank: try weights.floats("preprocessor.featurizer.fb"),
                                    window: try weights.floats("preprocessor.featurizer.window"))

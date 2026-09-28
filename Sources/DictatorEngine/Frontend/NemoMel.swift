@@ -66,6 +66,22 @@ public final class NemoMelFrontend {
         return featuresFromFrames(frames, T: T, valid: valid)
     }
 
+    /// NeMo `per_feature` normalization in place over time-major mel [T, nMels]: per bin, mean and
+    /// unbiased std (+1e-5 on the std) over the first `valid` frames; frames >= valid are set to 0.
+    public func normalizePerFeature(_ mel: inout [Float], T: Int, valid: Int) {
+        for m in 0..<nMels {
+            var sum = 0.0
+            for t in 0..<valid { sum += Double(mel[t * nMels + m]) }
+            let mean = valid > 0 ? sum / Double(valid) : 0
+            var ss = 0.0
+            for t in 0..<valid { let d = Double(mel[t * nMels + m]) - mean; ss += d * d }
+            var std = valid > 1 ? (ss / Double(valid - 1)).squareRoot() : 0
+            if std.isNaN { std = 0 }
+            std += 1e-5
+            for t in 0..<T { mel[t * nMels + m] = t < valid ? Float((Double(mel[t * nMels + m]) - mean) / std) : 0 }
+        }
+    }
+
     /// frames [T, winLength] of preemphasized samples -> log-mel [T, nMels]; frames >= valid are zero.
     func featuresFromFrames(_ frames: [Float], T: Int, valid: Int) -> [Float] {
         var re = [Float](repeating: 0, count: T * nBins)

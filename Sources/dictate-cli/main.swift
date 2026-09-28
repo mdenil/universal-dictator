@@ -8,6 +8,7 @@ commands:
   peaks        measure this machine's GPU bandwidth / FLOPS / dispatch overhead
   transcribe   transcribe a WAV/FLAC file with streaming inference:
                transcribe <audio> [--model nemotron] [--latency 160|560]
+  convert      write converted weights: convert nemotron|parakeet --precision f16
   ladder       compare against golden tensors:
                ladder nemotron --golden <utt-dir> [--context 70,1] [--model-dir models/...]
 """
@@ -35,7 +36,7 @@ do {
         let latency = Int(option("--latency", "160")!)!
         let modelDir = URL(fileURLWithPath: option("--model-dir", "models/nemotron-speech-streaming-en-0.6b")!)
         let t0 = Date()
-        let model = try NemotronModel(modelDir: modelDir)
+        let model = try NemotronModel(modelDir: modelDir, precision: option("--precision", "f32")!)
         let load = Date().timeIntervalSince(t0)
         let stream = NemotronStream(model: model, lookahead: latency / 80 - 1)
         let mel = model.frontend.features(audio)
@@ -48,14 +49,23 @@ do {
         FileHandle.standardError.write(String(format: "load %.2fs | %d chunks of %d ms | audio %.2fs, wall %.3fs (RTF %.4f) | per-chunk GPU p50 %.2f ms p99 %.2f ms | wall p50 %.2f ms p99 %.2f ms\n",
             load, g.count, stream.schedule.chunkMs, Double(audio.count) / 16000, wall, wall / (Double(audio.count) / 16000),
             g[g.count / 2] * 1000, g[min(g.count - 1, g.count * 99 / 100)] * 1000, w[w.count / 2] * 1000, w[min(w.count - 1, w.count * 99 / 100)] * 1000).data(using: .utf8)!)
+    case "convert":
+        let model = args.count > 1 ? args[1] : "nemotron"
+        let precision = WeightConverter.Precision(rawValue: option("--precision", "f16")!)!
+        let dirName = ["nemotron": "nemotron-speech-streaming-en-0.6b", "parakeet": "parakeet-unified-en-0.6b"][model]!
+        let modelDir = URL(fileURLWithPath: option("--model-dir", "models/\(dirName)")!)
+        let dst = NemotronModel.weightsURL(modelDir: modelDir, precision: precision.rawValue)
+        let r = try WeightConverter.convert(src: NemotronModel.weightsURL(modelDir: modelDir, precision: "f32"), dst: dst, precision: precision)
+        print("wrote \(dst.path): \(r.tensors) tensors, \(r.bytes / (1 << 20)) MB")
     case "probe":
         let w = try? SafeTensorsFile(URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b/nemo_extracted/weights.safetensors"))
         Probe.gemmSmallM(weights: w)
     case "ladder":
-        let model = args.count > 1 ? args[1] : "nemotron"
-        guard model == "nemotron" else { throw EngineError.io("ladder: unknown model \(model)") }
-        let ctxParts = option("--context", "70,1")!.split(separator: ",").map { Int($0)! }
-        let modelDir = URL(fileURLWithPath: option("--model-dir", "models/nemotron-speech-streaming-en-0.6b")!)
+        guard let kind = NemoModelKind(rawValue: args.count > 1 ? args[1] : "nemotron") else { throw EngineError.io("ladder: unknown model") }
+        let ctxParts = option("--context", kind == .nemotron ? "70,1" : "70,2,5")!.split(separator: ",").map { Int($0)! }
+        let mask: FastConformerEncoder.MaskSpec = ctxParts.count == 3 ? .chunkedLimitedRC(left: ctxParts[0], chunk: ctxParts[1], right: ctxParts[2])
+                                                                      : .chunkedLimited(left: ctxParts[0], right: ctxParts[1])
+        let modelDir = URL(fileURLWithPath: option("--model-dir", "models/\(kind.dirName)")!)
         // --golden <utt-dir> for one utterance, or --golden-root <dir> for every utterance under it.
         var dirs = [URL]()
         if let g = option("--golden") { dirs = [URL(fileURLWithPath: g)] }
@@ -69,9 +79,10 @@ do {
         var worst: [String: LadderRow] = [:]
         var order = [String]()
         var exact = 0, streamExact = 0, streamCount = 0
-        let streamModel = streamRoot == nil ? nil : try NemotronModel(modelDir: modelDir)
+        let precision = option("--precision", "f32")!
+        let streamModel = streamRoot == nil ? nil : try NemotronModel(modelDir: modelDir, kind: kind, precision: precision)
         for d in dirs {
-            let r = try NemotronLadder.run(modelDir: modelDir, goldenDir: d, left: ctxParts[0], right: ctxParts[1])
+            let r = try NemotronLadder.run(modelDir: modelDir, goldenDir: d, kind: kind, mask: mask, precision: precision)
             var rows = r.rows
             if let sr = streamRoot, let m = streamModel, let (mel, fr, valid) = NemotronLadder.lastMel {
                 let sd = sr.appendingPathComponent(d.lastPathComponent)

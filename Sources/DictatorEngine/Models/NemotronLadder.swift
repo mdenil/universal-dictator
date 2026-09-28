@@ -70,8 +70,15 @@ public enum NemotronLadder {
 
     /// Runs the offline ladder for one utterance directory of golden tensors.
     /// Expects: audio.npy, mel.npy [T,128], pre_encode.npy, layer_XX_out.npy, enc_out.npy, tokens.npy.
-    public static func run(modelDir: URL, goldenDir: URL, left: Int, right: Int, config: FastConformerConfig = .nemotron) throws -> (rows: [LadderRow], text: String, refText: String) {
-        let weights = try SafeTensorsFile(modelDir.appendingPathComponent("nemo_extracted/weights.safetensors"))
+    public static func run(modelDir: URL, goldenDir: URL, left: Int, right: Int, config: FastConformerConfig = .nemotron,
+                           precision: String = "f32") throws -> (rows: [LadderRow], text: String, refText: String) {
+        try run(modelDir: modelDir, goldenDir: goldenDir, kind: .nemotron, mask: .chunkedLimited(left: left, right: right), precision: precision)
+    }
+
+    public static func run(modelDir: URL, goldenDir: URL, kind: NemoModelKind, mask: FastConformerEncoder.MaskSpec,
+                           precision: String = "f32") throws -> (rows: [LadderRow], text: String, refText: String) {
+        let config = kind.config
+        let weights = try SafeTensorsFile(NemotronModel.weightsURL(modelDir: modelDir, precision: precision))
         var rows = [LadderRow]()
         func golden(_ n: String) -> NPYArray? {
             do { return try NPYArray.load(goldenDir.appendingPathComponent(n + ".npy")) } catch { print("golden \(n): \(error)"); return nil }
@@ -81,7 +88,10 @@ public enum NemotronLadder {
         let audio = try golden("audio")!.floats()
         let fe = NemoMelFrontend(filterbank: try weights.floats("preprocessor.featurizer.fb"),
                                  window: try weights.floats("preprocessor.featurizer.window"))
-        let ourMel = fe.features(audio)
+        var ourMel = fe.features(audio)
+        if kind.perFeatureNormalize {
+            fe.normalizePerFeature(&ourMel, T: ourMel.count / fe.nMels, valid: fe.validFrames(samples: audio.count))
+        }
         var refMelArr = golden("mel")!
         var refMel = try refMelArr.floats()
         if refMelArr.shape.count == 2 && refMelArr.shape[0] == config.melBins && refMelArr.shape[1] != config.melBins {
@@ -99,9 +109,10 @@ public enum NemotronLadder {
         var taps: [String: Tensor] = [:]
         let melFrames = refMelArr.shape[0]
         let out = enc.forwardOffline(mel: refMel, melFrames: melFrames, validMel: fe.validFrames(samples: audio.count),
-                                     left: left, right: right) { name, t in taps[name] = t }
+                                     mask: mask) { name, t in taps[name] = t }
         for name in ["pre_encode"] + (0..<config.layers).map { String(format: "layer_%02d_out", $0) } {
-            guard let g = golden(name) ?? (name == "pre_encode" ? golden("enc_in") : nil), let t = taps[name] else {
+            // Our "pre_encode" tap is the layer-0 input (after xscale), which the golden calls enc_in.
+            guard let g = (name == "pre_encode" ? golden("enc_in") : nil) ?? golden(name), let t = taps[name] else {
                 rows.append(LadderRow(name: name, shape: [], cosine: .nan, maxAbs: .nan, refMaxAbs: .nan, skipped: "missing"))
                 continue
             }

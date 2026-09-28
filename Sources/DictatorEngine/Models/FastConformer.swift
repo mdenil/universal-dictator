@@ -49,6 +49,8 @@ struct ConformerLayerWeights {
     var pw2: Tensor
     var normFF2W, normFF2B, ff2W1, ff2W2: Tensor
     var normOutW, normOutB: Tensor
+    // Linear/pointwise biases (Parakeet: use_bias=true; Nemotron: none).
+    var ff1B1, ff1B2, ff2B1, ff2B2, bq, bk, bv, bo, pw1B, pw2B: Tensor?
 }
 
 /// Subsampling weights (dw_striding, 3 conv stages + linear).
@@ -77,6 +79,7 @@ public final class FastConformerEncoder {
         // are channel-last (freq, channel), so permute its input columns once here.
         let C = config.subsamplingChannels, F = config.subsampledFreq
         let outWt = try weights.floats("encoder.pre_encode.out.weight")
+        let outDtype = weights.entries["encoder.pre_encode.out.weight"]!.dtype
         let D = config.dModel
         var perm = [Float](repeating: 0, count: outWt.count)
         for o in 0..<D { for c in 0..<C { for f in 0..<F {
@@ -88,7 +91,7 @@ public final class FastConformerEncoder {
             c3W: try reshaped("encoder.pre_encode.conv.3.weight", [C, C]), c3B: try t("encoder.pre_encode.conv.3.bias"),
             c5W: try t("encoder.pre_encode.conv.5.weight"), c5B: try t("encoder.pre_encode.conv.5.bias"),
             c6W: try reshaped("encoder.pre_encode.conv.6.weight", [C, C]), c6B: try t("encoder.pre_encode.conv.6.bias"),
-            outW: Tensor.from(perm, shape: [D, C * F], dtype: .f32, ctx), outB: try t("encoder.pre_encode.out.bias"))
+            outW: Tensor.from(perm, shape: [D, C * F], dtype: outDtype, ctx), outB: try t("encoder.pre_encode.out.bias"))
 
         var ls = [ConformerLayerWeights]()
         for i in 0..<config.layers {
@@ -114,6 +117,8 @@ public final class FastConformerEncoder {
                 dw = Tensor.from(fw, shape: [D, config.convKernel], dtype: .f32, ctx)
                 dwBias = Tensor.from(fb, shape: [D], dtype: .f32, ctx)
             }
+            func opt(_ n: String) throws -> Tensor? { weights.has(p + n) ? try t(p + n) : nil }
+            func optConv(_ n: String) throws -> Tensor? { weights.has(p + n) ? try weights.tensor(p + n).reshaped([weights.entries[p + n]!.shape[0]]) : nil }
             ls.append(ConformerLayerWeights(
                 normFF1W: try t(p + "norm_feed_forward1.weight"), normFF1B: try t(p + "norm_feed_forward1.bias"),
                 ff1W1: try t(p + "feed_forward1.linear1.weight"), ff1W2: try t(p + "feed_forward1.linear2.weight"),
@@ -128,7 +133,12 @@ public final class FastConformerEncoder {
                 pw2: try reshaped(p + "conv.pointwise_conv2.weight", [D, D]),
                 normFF2W: try t(p + "norm_feed_forward2.weight"), normFF2B: try t(p + "norm_feed_forward2.bias"),
                 ff2W1: try t(p + "feed_forward2.linear1.weight"), ff2W2: try t(p + "feed_forward2.linear2.weight"),
-                normOutW: try t(p + "norm_out.weight"), normOutB: try t(p + "norm_out.bias")))
+                normOutW: try t(p + "norm_out.weight"), normOutB: try t(p + "norm_out.bias"),
+                ff1B1: try opt("feed_forward1.linear1.bias"), ff1B2: try opt("feed_forward1.linear2.bias"),
+                ff2B1: try opt("feed_forward2.linear1.bias"), ff2B2: try opt("feed_forward2.linear2.bias"),
+                bq: try opt("self_attn.linear_q.bias"), bk: try opt("self_attn.linear_k.bias"),
+                bv: try opt("self_attn.linear_v.bias"), bo: try opt("self_attn.linear_out.bias"),
+                pw1B: try optConv("conv.pointwise_conv1.bias"), pw2B: try optConv("conv.pointwise_conv2.bias")))
         }
         layers = ls
     }
@@ -265,27 +275,27 @@ public final class FastConformerEncoder {
 
         // FF1 (macaron, x0.5)
         s.layerNorm(x, gamma: w.normFF1W, beta: w.normFF1B, out: tmpD)
-        s.gemm(tmpD, w.ff1W1, out: ffH, act: .silu)
-        s.gemm(ffH, w.ff1W2, out: r1, outScale: 0.5, residual: x)
+        s.gemm(tmpD, w.ff1W1, bias: w.ff1B1, out: ffH, act: .silu)
+        s.gemm(ffH, w.ff1W2, bias: w.ff1B2, out: r1, outScale: 0.5, residual: x)
         capture("ff1", r1)
 
         // Self-attention with relative positions.
         let Tk = keys.shape[0]
         s.layerNorm(r1, gamma: w.normAttW, beta: w.normAttB, out: tmpD)
         let q = ws.q.rows(0, T)
-        s.gemm(tmpD, w.wq, out: q)
-        s.gemm(tmpD, w.wk, out: keys.rows(Tk - T, T))
-        s.gemm(tmpD, w.wv, out: values.rows(Tk - T, T))
+        s.gemm(tmpD, w.wq, bias: w.bq, out: q)
+        s.gemm(tmpD, w.wk, bias: w.bk, out: keys.rows(Tk - T, T))
+        s.gemm(tmpD, w.wv, bias: w.bv, out: values.rows(Tk - T, T))
         let att = ws.att.rows(0, T)
         s.relPosAttention(q: q, k: keys, v: values, posTable: posTables[li], relOffset: relOffset,
                           biasU: w.biasU, biasV: w.biasV, ranges: ranges, out: att, heads: cfg.heads)
-        s.gemm(att, w.wo, out: r2, residual: r1)
+        s.gemm(att, w.wo, bias: w.bo, out: r2, residual: r1)
         capture("attn", r2)
 
         // Convolution module.
         s.layerNorm(r2, gamma: w.normConvW!, beta: w.normConvB!, out: tmpD)
         let pw = ws.pw.rows(0, T)
-        s.gemm(tmpD, w.pw1, out: pw)
+        s.gemm(tmpD, w.pw1, bias: w.pw1B, out: pw)
         let left = cfg.causalConv ? cfg.convKernel - 1 : (cfg.convKernel - 1) / 2
         let glued = convIn.rows(left, T)
         s.glu(pw, out: glued)
@@ -298,16 +308,41 @@ public final class FastConformerEncoder {
             // BatchNorm is folded into the depthwise weights; SiLU is fused into the conv.
             s.dwconv1d(convIn, w: w.dw!, bias: w.dwBias, out: tmpD, act: .silu)
         }
-        s.gemm(tmpD, w.pw2, out: r3, residual: r2)
+        s.gemm(tmpD, w.pw2, bias: w.pw2B, out: r3, residual: r2)
         capture("conv", r3)
 
         // FF2 (x0.5)
         s.layerNorm(r3, gamma: w.normFF2W, beta: w.normFF2B, out: tmpD)
-        s.gemm(tmpD, w.ff2W1, out: ffH, act: .silu)
-        s.gemm(ffH, w.ff2W2, out: r4, outScale: 0.5, residual: r3)
+        s.gemm(tmpD, w.ff2W1, bias: w.ff2B1, out: ffH, act: .silu)
+        s.gemm(ffH, w.ff2W2, bias: w.ff2B2, out: r4, outScale: 0.5, residual: r3)
         capture("ff2", r4)
 
         s.layerNorm(r4, gamma: w.normOutW, beta: w.normOutB, out: out)
+    }
+
+    /// Attention mask styles used by the models we run.
+    public enum MaskSpec {
+        /// NeMo `chunked_limited` [left, right]: chunks of right+1 frames, left//(right+1) chunks back.
+        case chunkedLimited(left: Int, right: Int)
+        /// NeMo `chunked_limited_with_rc` [left, chunk, right]: frame i sees
+        /// [c*chunk - left, c*chunk + chunk - 1 + right] with c = i / chunk (inclusive, clipped).
+        case chunkedLimitedRC(left: Int, chunk: Int, right: Int)
+        case full
+
+        public func ranges(T: Int) -> [Int32] {
+            switch self {
+            case .chunkedLimited(let l, let r): return FastConformerEncoder.chunkedLimitedRanges(T: T, left: l, right: r)
+            case .chunkedLimitedRC(let l, let c, let r):
+                var out = [Int32]()
+                for i in 0..<T {
+                    let ci = i / c
+                    out.append(Int32(max(0, ci * c - l)))
+                    out.append(Int32(min(T, ci * c + c + r)))
+                }
+                return out
+            case .full: return (0..<T).flatMap { _ in [Int32(0), Int32(T)] }
+            }
+        }
     }
 
     /// Key ranges for NeMo's `chunked_limited` mask over a full utterance of T frames.
@@ -327,6 +362,10 @@ public final class FastConformerEncoder {
     /// (chunked_limited). Returns encoder output [T', D]. `tap` receives "pre_encode",
     /// "layer_XX_out" and, for layer 0, the internal seams.
     public func forwardOffline(mel: [Float], melFrames: Int, validMel: Int, left: Int, right: Int, tap: Tap? = nil) -> Tensor {
+        forwardOffline(mel: mel, melFrames: melFrames, validMel: validMel, mask: .chunkedLimited(left: left, right: right), tap: tap)
+    }
+
+    public func forwardOffline(mel: [Float], melFrames: Int, validMel: Int, mask: MaskSpec, tap: Tap? = nil) -> Tensor {
         let cfg = config
         let D = cfg.dModel
         let T = subsampledLength(melFrames)
@@ -345,7 +384,7 @@ public final class FastConformerEncoder {
         var x = ws.x.rows(0, T), y = ws.y.rows(0, T)
         encodeSubsampling(s, ws, mel: melT, validMel: validMel, out: x)
         capture("pre_encode", x)
-        var rr = FastConformerEncoder.chunkedLimitedRanges(T: T, left: left, right: right)
+        var rr = mask.ranges(T: T)
         for i in 0..<T { rr[2 * i + 1] = min(rr[2 * i + 1], Int32(validT)) }
         let ranges = ws.ranges.rows(0, T)
         rr.withUnsafeBytes { ranges.contents.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
