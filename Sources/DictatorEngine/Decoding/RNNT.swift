@@ -13,6 +13,7 @@ public final class RNNTDecoder {
 
     let embed: [Float]              // [vocab, hidden]; blank row is the padding row
     let wIH: [[Float]], wHH: [[Float]], bias: [[Float]]   // per layer: [4H, H], [4H, H], b_ih + b_hh
+    let wCat: [[Float]]                                   // per layer: [4H, 2H] = [W_ih | W_hh]
     let predW: [Float], predB: [Float]                    // joint.pred [H, H], [H]
     let outW: [Float], outB: [Float]                      // joint_net.2 [vocab, H], [vocab]
 
@@ -45,6 +46,14 @@ public final class RNNTDecoder {
         }
         layers = l
         wIH = ih; wHH = hh; bias = bb
+        let Hh = hidden
+        wCat = (0..<l).map { li in
+            var w = [Float](repeating: 0, count: 4 * Hh * 2 * Hh)
+            for r in 0..<(4 * Hh) {
+                for c in 0..<Hh { w[r * 2 * Hh + c] = ih[li][r * Hh + c]; w[r * 2 * Hh + Hh + c] = hh[li][r * Hh + c] }
+            }
+            return w
+        }
         predW = try weights.floats(prefix + "joint.pred.weight")
         predB = try weights.floats(prefix + "joint.pred.bias")
         outW = try weights.floats(prefix + "joint.joint_net.2.weight")
@@ -59,29 +68,47 @@ public final class RNNTDecoder {
     }
 
     /// One prediction-network step: returns the joint's pred projection (joint.pred applied) and the new state.
+    /// Per layer: gates = [W_ih W_hh] · [x; h] + b in a single sgemv, activations via vForce.
     func predict(token: Int, h: [[Float]], c: [[Float]]) -> (proj: [Float], h: [[Float]], c: [[Float]]) {
         let H = hidden
-        var x = token == blank ? [Float](repeating: 0, count: H) : Array(embed[(token * H)..<((token + 1) * H)])
+        var xh = [Float](repeating: 0, count: 2 * H)
+        if token != blank { xh.withUnsafeMutableBufferPointer { p in embed.withUnsafeBufferPointer { e in
+            p.baseAddress!.update(from: e.baseAddress! + token * H, count: H) } } }
         var nh = h, nc = c
         var gates = [Float](repeating: 0, count: 4 * H)
+        var n32 = Int32(H)
         for l in 0..<layers {
+            xh.withUnsafeMutableBufferPointer { p in h[l].withUnsafeBufferPointer { hp in (p.baseAddress! + H).update(from: hp.baseAddress!, count: H) } }
             gates = bias[l]
-            cblas_sgemv(CblasRowMajor, CblasNoTrans, Int32(4 * H), Int32(H), 1, wIH[l], Int32(H), x, 1, 1, &gates, 1)
-            cblas_sgemv(CblasRowMajor, CblasNoTrans, Int32(4 * H), Int32(H), 1, wHH[l], Int32(H), h[l], 1, 1, &gates, 1)
-            var hl = [Float](repeating: 0, count: H), cl = [Float](repeating: 0, count: H)
-            for j in 0..<H {
-                let i = 1 / (1 + exp(-gates[j]))
-                let f = 1 / (1 + exp(-gates[H + j]))
-                let g = tanh(gates[2 * H + j])
-                let o = 1 / (1 + exp(-gates[3 * H + j]))
-                cl[j] = f * c[l][j] + i * g
-                hl[j] = o * tanh(cl[j])
+            cblas_sgemv(CblasRowMajor, CblasNoTrans, Int32(4 * H), Int32(2 * H), 1, wCat[l], Int32(2 * H), xh, 1, 1, &gates, 1)
+            gates.withUnsafeMutableBufferPointer { g in
+                let gp = g.baseAddress!
+                // sigmoid(i, f, o) = 1 / (1 + exp(-x)); tanh(g)
+                var neg: Float = -1
+                vDSP_vsmul(gp, 1, &neg, gp, 1, vDSP_Length(2 * H))
+                vDSP_vsmul(gp + 3 * H, 1, &neg, gp + 3 * H, 1, vDSP_Length(H))
+                vvexpf(gp, gp, &n32); vvexpf(gp + H, gp + H, &n32); vvexpf(gp + 3 * H, gp + 3 * H, &n32)
+                vvtanhf(gp + 2 * H, gp + 2 * H, &n32)
+                var one: Float = 1
+                for off in [0, H, 3 * H] {
+                    vDSP_vsadd(gp + off, 1, &one, gp + off, 1, vDSP_Length(H))
+                    vvrecf(gp + off, gp + off, &n32)
+                }
+                nc[l].withUnsafeMutableBufferPointer { cp in
+                    nh[l].withUnsafeMutableBufferPointer { hp in
+                        let cc = cp.baseAddress!, hh = hp.baseAddress!
+                        // c' = f*c + i*g ; h' = o * tanh(c')
+                        vDSP_vmul(gp + H, 1, cc, 1, cc, 1, vDSP_Length(H))
+                        vDSP_vma(gp, 1, gp + 2 * H, 1, cc, 1, cc, 1, vDSP_Length(H))
+                        vvtanhf(hh, cc, &n32)
+                        vDSP_vmul(hh, 1, gp + 3 * H, 1, hh, 1, vDSP_Length(H))
+                    }
+                }
             }
-            nh[l] = hl; nc[l] = cl
-            x = hl
+            xh.withUnsafeMutableBufferPointer { p in nh[l].withUnsafeBufferPointer { hp in p.baseAddress!.update(from: hp.baseAddress!, count: H) } }
         }
         var proj = predB
-        cblas_sgemv(CblasRowMajor, CblasNoTrans, Int32(H), Int32(H), 1, predW, Int32(H), x, 1, 1, &proj, 1)
+        cblas_sgemv(CblasRowMajor, CblasNoTrans, Int32(H), Int32(H), 1, predW, Int32(H), xh, 1, 1, &proj, 1)
         return (proj, nh, nc)
     }
 

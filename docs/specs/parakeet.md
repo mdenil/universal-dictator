@@ -164,3 +164,5 @@ Envelope file: `data/golden/parakeet/noise_floor.json`. Every number is the wors
 Tokens: identical on 20/20 utterances. The argmax of the first 20 joint steps was identical everywhere.
 
 **Spec re-implementation vs reference** (`check_spec.py`, 3 utterances): the normalized mel matches to 2.4e-6 max-abs (the per-bin mean/std reduction order differs). pre_encode, enc_in (×32), pos_emb and att_mask are bit-identical. Layer outputs match to ≤ 3.1e-5 max-abs (≤ 3.7e-7 relative), and tokens are identical.
+
+**Offline-with-mask vs official buffered streaming** (different algorithms, §5): 8/20 dev transcripts are identical. The rest differ mostly in punctuation, casing and spelling variants ("Grey"/"Gray"). Normalized WER on dev20 is 4.11% offline_70_2_5 vs 5.90% buffered. The buffered dev20 golden (`data/golden/parakeet/stream_70_2_5/`) was produced on **MPS fp32** with `batch_size=1`. On this machine's CPU the buffered pipeline ran at about 1/20 of real time. The same run at `batch_size=20` on MPS gave identical transcripts on 20/20 utterances.

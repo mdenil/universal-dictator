@@ -188,9 +188,15 @@ do {
         let dst = NemotronModel.weightsURL(modelDir: modelDir, precision: precision.rawValue)
         let r = try WeightConverter.convert(src: NemotronModel.weightsURL(modelDir: modelDir, precision: "f32"), dst: dst, precision: precision)
         print("wrote \(dst.path): \(r.tensors) tensors, \(r.bytes / (1 << 20)) MB")
+    case "dump-step":
+        // dump-step <audio> --chunk K --latency 160 --out <dir>
+        let audio = try AudioFile.readMono16k(URL(fileURLWithPath: args[1]))
+        try Probe.dumpNemotronStep(modelDir: URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b"), audio: audio,
+                                   chunk: Int(option("--chunk", "50")!)!, lookahead: Int(option("--latency", "160")!)! / 80 - 1,
+                                   out: URL(fileURLWithPath: option("--out", "scratch/stepdump")!))
     case "probe":
         let w = try? SafeTensorsFile(URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b/nemo_extracted/weights.safetensors"))
-        if args.contains("gemm") { Probe.gemmShapes() } else if args.contains("voxtral") { Probe.voxtralShapes() } else { Probe.gemmSmallM(weights: w) }
+        if args.contains("rnnt") { try Probe.rnntDecoderCPU(modelDir: URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b")) } else if args.contains("gemm") { Probe.gemmShapes() } else if args.contains("voxtral") { Probe.voxtralShapes() } else { Probe.gemmSmallM(weights: w) }
     case "ladder":
         guard let kind = NemoModelKind(rawValue: args.count > 1 ? args[1] : "nemotron") else { throw EngineError.io("ladder: unknown model") }
         let ctxParts = option("--context", kind == .nemotron ? "70,1" : "70,2,5")!.split(separator: ",").map { Int($0)! }

@@ -75,3 +75,69 @@ extension Probe {
         }
     }
 }
+
+extension Probe {
+    /// CPU cost of the RNN-T prediction network step and joint (per emitted symbol / per frame).
+    public static func rnntDecoderCPU(modelDir: URL) throws {
+        let w = try SafeTensorsFile(modelDir.appendingPathComponent("nemo_extracted/weights.safetensors"))
+        let dec = try RNNTDecoder(weights: w)
+        let st = dec.initialState()
+        let enc = randomProbeFloats(dec.hidden)
+        var t0 = DispatchTime.now().uptimeNanoseconds
+        var r = dec.predict(token: 5, h: st.h, c: st.c)
+        for i in 0..<1000 { r = dec.predict(token: i % 1000, h: r.h, c: r.c) }
+        let tPred = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9 / 1000
+        t0 = DispatchTime.now().uptimeNanoseconds
+        var l = [Float]()
+        enc.withUnsafeBufferPointer { p in for _ in 0..<1000 { l = dec.jointLogits(encProj: p.baseAddress!, predProj: r.proj) } }
+        let tJoint = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9 / 1000
+        print(String(format: "RNN-T on CPU (Accelerate): prediction step %.1f us, joint %.1f us (logits %d)", tPred * 1e6, tJoint * 1e6, l.count))
+    }
+
+    static func randomProbeFloats(_ n: Int) -> [Float] { (0..<n).map { Float(($0 * 7919) % 1000) / 1000 - 0.5 } }
+}
+
+extension Probe {
+    /// Dumps one steady-state Nemotron streaming step (inputs, caches before, encoder output) as .npy,
+    /// for validating the CoreML/Neural Engine study model against this engine.
+    public static func dumpNemotronStep(modelDir: URL, audio: [Float], chunk: Int, lookahead: Int, out: URL) throws {
+        let model = try NemotronModel(modelDir: modelDir, precision: "f32")
+        let stream = NemotronStream(model: model, lookahead: lookahead)
+        let mel = model.frontend.features(audio)
+        let frames = audio.count / 160 + 1
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let sch = stream.schedule
+        let bins = 128
+        var idx = 0, k = 0
+        try mel.withUnsafeBufferPointer { m in
+            while idx < frames {
+                let first = idx == 0
+                let size = first ? sch.firstChunk : sch.chunk
+                let end = min(idx + size, frames)
+                let cacheStart = first ? idx : idx - sch.preEncodeCache
+                let rows = end - cacheStart
+                let slice = UnsafeBufferPointer(rebasing: m[(cacheStart * bins)..<((cacheStart + rows) * bins)])
+                if k == chunk {
+                    let st = stream.state
+                    let p = st.parity, L = st.leftContext
+                    func save(_ name: String, _ ts: [Tensor]) throws {
+                        let fl = ts.flatMap { $0.toFloats() }
+                        try NPYArray.save(fl, shape: [ts.count] + ts[0].shape, to: out.appendingPathComponent(name + ".npy"))
+                    }
+                    try save("kcache", st.kv.map { $0[p].rows(0, L) })
+                    try save("vcache", st.vv.map { $0[p].rows(0, L) })
+                    try save("convcache", st.conv.map { $0[p].rows(0, 8) })
+                    try NPYArray.save(Array(slice), shape: [rows, bins], to: out.appendingPathComponent("mel.npy"))
+                    var enc = [Float]()
+                    stream.encTap = { enc += $0 }
+                    stream.step(melRows: slice, nRows: rows, validRows: rows, keepAll: false)
+                    try NPYArray.save(enc, shape: [enc.count / 1024, 1024], to: out.appendingPathComponent("enc.npy"))
+                    print("dumped chunk \(k): mel rows \(rows), cacheLen \(st.cacheLen)")
+                    return
+                }
+                stream.step(melRows: slice, nRows: rows, validRows: rows, keepAll: false)
+                idx += size; k += 1
+            }
+        }
+    }
+}
