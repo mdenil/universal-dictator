@@ -179,6 +179,22 @@ public final class VoxtralModel {
 
     /// Prompt (§3): BOS + STREAMING_PAD x (32 + n_delay).
     public var prompt: [Int] { [bos] + Array(repeating: streamingPad, count: leftPadTokens + nDelay) }
+
+    private var snapshot: VoxtralSession.Snapshot?
+    private let snapshotLock = NSLock()
+
+    /// The silent-prefix snapshot, computed once per model. Decoder positions 0..30 and encoder frames
+    /// 0..123 only see mel frames <= 247, which cover left-pad samples only (frame 247 ends at sample
+    /// 39720 < 40960), so this state is identical for every stream.
+    func silenceSnapshot() -> VoxtralSession.Snapshot? {
+        snapshotLock.lock(); defer { snapshotLock.unlock() }
+        if snapshot == nil {
+            let tmp = VoxtralSession(model: self)
+            tmp.useSnapshot = false
+            snapshot = tmp.makeSnapshot(positions: 31)
+        }
+        return snapshot
+    }
 }
 
 /// Sliding K/V storage for one attention stack: [capacity, width] rows per layer, capacity = window + slack.
@@ -364,16 +380,25 @@ public final class VoxtralSession {
     }
 
     /// Prefill: prompt positions with mel frames 0 ..< 8 * prompt.count. Returns the first emitted token.
+    /// Unless disabled (DICTATOR_VOX_SNAPSHOT=0), the silent prefix (decoder positions 0..30, encoder
+    /// frames 0..123, which see only the zero left-pad and fixed prompt tokens) is restored from a
+    /// per-model snapshot and only the remaining 8 positions are computed.
     @discardableResult
     public func prefill(mel: [Float]) -> Int {
         let P = model.prompt.count
         precondition(mel.count == 8 * P * 128)
         let t0 = DispatchTime.now().uptimeNanoseconds
         let s = Step(ctx)
-        let melT = Tensor.from(mel, shape: [8 * P, 128], dtype: .f32, ctx)
-        let audio = Tensor(ctx, shape: [P, model.decDim])
+        var from = 0
+        if useSnapshot, let snap = model.silenceSnapshot() {
+            restore(snap, s)
+            from = snap.positions
+        }
+        let n = P - from
+        let melT = Tensor.from(Array(mel[(8 * from * 128)...]), shape: [8 * n, 128], dtype: .f32, ctx)
+        let audio = Tensor(ctx, shape: [n, model.decDim])
         encodeAudio(s, mel: melT, out: audio)
-        let (idx, logits) = decode(s, ids: model.prompt, audio: audio)
+        let (idx, logits) = decode(s, ids: Array(model.prompt[from...]), audio: audio)
         s.run()
         ids = model.prompt
         let tok = Int(idx.contents.assumingMemoryBound(to: Int32.self)[0])
@@ -381,6 +406,51 @@ public final class VoxtralSession {
         emitted.append(tok)
         stepTimes.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
         return tok
+    }
+
+    public var useSnapshot = ProcessInfo.processInfo.environment["DICTATOR_VOX_SNAPSHOT"] != "0"
+
+    /// State after the constant silent prefix of the stream.
+    public struct Snapshot {
+        let positions: Int            // decoder positions covered (31)
+        let encFrames: Int            // encoder frames covered (124)
+        let encK: [Tensor], encV: [Tensor], decK: [Tensor], decV: [Tensor]
+        let convMel: Tensor, conv1: Tensor
+    }
+
+    func makeSnapshot(positions: Int) -> Snapshot {
+        let s = Step(ctx)
+        let melFrames = 8 * positions
+        let zeros = [Float](repeating: 0, count: 32 * 1280)
+        let mel = model.frontend.frames(zeros, from: 0, count: melFrames)
+        let melT = Tensor.from(mel, shape: [melFrames, 128], dtype: .f32, ctx)
+        let audio = Tensor(ctx, shape: [positions, model.decDim])
+        encodeAudio(s, mel: melT, out: audio)
+        _ = decode(s, ids: Array(model.prompt[0..<positions]), audio: audio)
+        s.run()
+        let E = 4 * positions
+        func copyRows(_ ts: [Tensor], _ n: Int) -> [Tensor] {
+            ts.map { t in let c = Tensor(ctx, shape: [n, t.shape[1]]); memcpy(c.contents, t.contents, n * t.shape[1] * 4); return c }
+        }
+        let cm = Tensor(ctx, shape: [2, 128]); memcpy(cm.contents, convMelCache.contents, cm.byteCount)
+        let c1 = Tensor(ctx, shape: [1, 1280]); memcpy(c1.contents, conv1Cache.contents, c1.byteCount)
+        return Snapshot(positions: positions, encFrames: E, encK: copyRows(encKV.k, E), encV: copyRows(encKV.v, E),
+                        decK: copyRows(decKV.k, positions), decV: copyRows(decKV.v, positions), convMel: cm, conv1: c1)
+    }
+
+    func restore(_ snap: Snapshot, _ s: Step) {
+        for i in 0..<snap.encK.count {
+            s.copy(snap.encK[i], into: encKV.k[i].rows(0, snap.encFrames))
+            s.copy(snap.encV[i], into: encKV.v[i].rows(0, snap.encFrames))
+        }
+        for i in 0..<snap.decK.count {
+            s.copy(snap.decK[i], into: decKV.k[i].rows(0, snap.positions))
+            s.copy(snap.decV[i], into: decKV.v[i].rows(0, snap.positions))
+        }
+        s.copy(snap.convMel, into: convMelCache)
+        s.copy(snap.conv1, into: conv1Cache)
+        encKV.count = snap.encFrames; encPos = snap.encFrames
+        decKV.count = snap.positions; decPos = snap.positions
     }
 
     /// GPU seconds of the encoder and decoder command buffers (only when `splitTiming` is set).
