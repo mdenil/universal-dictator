@@ -92,7 +92,9 @@ public final class SafeTensorsFile {
         let abs = dataStart + e.begin
         let len = e.end - e.begin
         let (buf, off) = try window(containing: abs, length: len)
-        return Tensor(buffer: buf, offset: off, shape: e.shape, dtype: e.dtype)
+        let t = Tensor(buffer: buf, offset: off, shape: e.shape, dtype: e.dtype)
+        if e.dtype == .i8, entries[name + ".qscale"] != nil { t.qscale = try tensor(name + ".qscale") }
+        return t
     }
 
     private func window(containing abs: Int, length: Int) throws -> (MTLBuffer, Int) {

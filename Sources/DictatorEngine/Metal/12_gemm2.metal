@@ -51,6 +51,7 @@ kernel void gemm2_nt(
     device const float* bias [[buffer(3)]],
     device const TC* R [[buffer(4)]],
     constant GemmParams& p [[buffer(5)]],
+    device const float* wscale [[buffer(6)]],
     uint2 tgp [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]])
@@ -112,6 +113,7 @@ kernel void gemm2_nt(
         int gm = m0 + r, gn = n0 + c;
         if (gm < p.M && gn < p.N) {
             float v = p.alpha * Cs[idx];
+            if (p.has_wscale) v *= wscale[gn];
             if (p.has_bias) v += bias[gn];
             v = apply_act(v, p.act) * p.out_scale;
             if (p.has_residual) v += p.res_scale * to_f(R[(long)gm * p.ldr + gn]);
@@ -123,7 +125,7 @@ kernel void gemm2_nt(
 #define INSTANTIATE_GEMM2(NAME, TA, TB, TC, SGR, SGC, FM, FN) \
     template [[host_name(NAME)]] kernel void gemm2_nt<TA, TB, TC, SGR, SGC, FM, FN>( \
         device const TA*, device const TB*, device TC*, device const float*, device const TC*, \
-        constant GemmParams&, uint2, uint, uint);
+        constant GemmParams&, device const float*, uint2, uint, uint);
 
 #define INSTANTIATE_GEMM2_BOTH(T, TA, TB, TC) \
     INSTANTIATE_GEMM2("gemm2_32x64_" T, TA, TB, TC, 1, 4, 4, 2)
@@ -133,3 +135,4 @@ INSTANTIATE_GEMM2_BOTH("f16_f16_f16", half, half, half)
 INSTANTIATE_GEMM2_BOTH("f32_f16_f32", float, half, float)
 INSTANTIATE_GEMM2_BOTH("f16_f16_f32", half, half, float)
 INSTANTIATE_GEMM2_BOTH("f32_bf16_f32", float, ushort, float)
+INSTANTIATE_GEMM2_BOTH("f32_i8_f32", float, char, float)

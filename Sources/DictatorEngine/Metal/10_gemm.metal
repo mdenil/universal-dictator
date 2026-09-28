@@ -12,6 +12,7 @@ struct GemmParams {
     float alpha;
     float res_scale;
     float out_scale;
+    int has_wscale;        // int8 weights: multiply the dot product by wscale[n]
 };
 
 constant constexpr int GBM = 64;

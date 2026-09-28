@@ -15,6 +15,7 @@ struct GemmParams {
     var alpha: Float
     var resScale: Float
     var outScale: Float
+    var hasWScale: Int32 = 0
 }
 
 /// One unit of GPU work: a command buffer with a single serial compute encoder.
@@ -72,6 +73,7 @@ private func dtypeTag(_ d: DType) -> String {
     case .f32: return "f32"
     case .f16: return "f16"
     case .bf16: return "bf16"
+    case .i8: return "i8"
     default: fatalError("no GEMM for \(d)")
     }
 }
@@ -89,7 +91,8 @@ extension Step {
         precondition(out.count == M * N, "gemm: out \(out.shape) expected \(M)x\(N)")
         let types = "\(dtypeTag(a.dtype))_\(dtypeTag(w.dtype))_\(dtypeTag(out.dtype))"
         // Skinny inputs are weight-bandwidth bound: use the GEMV kernel (reads each weight row once).
-        let skinny = M <= 8 && K % 4 == 0 && gemvEnabled
+        let kAlign = w.dtype == .i8 ? 16 : (w.dtype.size == 2 ? 8 : 4)
+        let skinny = M <= 8 && K % kAlign == 0 && gemvEnabled
         // GEMM v2 uses 32x64 tiles (a 64x64 v2 tile measured slower; see PERF_LOG R1).
         // DICTATOR_GEMM_V1=1 restores the v1 kernel.
         let name = skinny ? "gemv_nt_" + types : (gemmV1 ? "gemm_nt_" + types : "gemm2_32x64_" + types)
@@ -97,7 +100,10 @@ extension Step {
         var params = GemmParams(M: Int32(M), N: Int32(N), K: Int32(K), lda: Int32(K), ldb: Int32(K), ldc: Int32(N),
                                 hasBias: bias == nil ? 0 : 1, act: act.rawValue,
                                 hasResidual: residual == nil ? 0 : 1, ldr: Int32(N),
-                                alpha: alpha, resScale: resScale, outScale: outScale)
+                                alpha: alpha, resScale: resScale, outScale: outScale,
+                                hasWScale: w.qscale == nil ? 0 : 1)
+        precondition(w.dtype != .i8 || w.qscale != nil, "int8 weight without scales")
+        if let q = w.qscale { bind(q, 6) } else { bind(out, 6) }
         bind(a, 0); bind(w, 1); bind(out, 2)
         if let b = bias { precondition(b.dtype == .f32); bind(b, 3) } else { bind(out, 3) }
         if let r = residual { precondition(r.dtype == out.dtype); bind(r, 4) } else { bind(out, 4) }

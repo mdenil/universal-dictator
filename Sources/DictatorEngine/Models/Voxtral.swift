@@ -119,10 +119,10 @@ public final class VoxtralModel {
     let embed, decNorm: Tensor
     let encInvFreq, decInvFreq: Tensor
 
-    public init(modelDir: URL, delayMs: Int = 480, ctx: MetalContext = .shared) throws {
+    public init(modelDir: URL, weights: String = "model.safetensors", delayMs: Int = 480, ctx: MetalContext = .shared) throws {
         self.ctx = ctx
         nDelay = delayMs / 80
-        let wf = try SafeTensorsFile(modelDir.appendingPathComponent("model.safetensors"), ctx)
+        let wf = try SafeTensorsFile(modelDir.appendingPathComponent(weights), ctx)
         w = wf
         tokenizer = try TekkenDecoder(url: modelDir.appendingPathComponent("tekken.json"))
         let cx = ctx

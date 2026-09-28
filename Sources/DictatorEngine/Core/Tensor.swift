@@ -19,6 +19,8 @@ public final class Tensor {
     public let offset: Int
     public private(set) var shape: [Int]
     public let dtype: DType
+    /// Per-output-row dequantization scales (f32 [rows]) for int8 weights: w = q * qscale[row].
+    public var qscale: Tensor?
 
     public init(buffer: MTLBuffer, offset: Int = 0, shape: [Int], dtype: DType) {
         self.buffer = buffer
@@ -38,7 +40,9 @@ public final class Tensor {
     /// Same storage, new shape (element count must match).
     public func reshaped(_ newShape: [Int]) -> Tensor {
         precondition(newShape.reduce(1, *) == count, "reshape \(shape) -> \(newShape)")
-        return Tensor(buffer: buffer, offset: offset, shape: newShape, dtype: dtype)
+        let t = Tensor(buffer: buffer, offset: offset, shape: newShape, dtype: dtype)
+        t.qscale = qscale
+        return t
     }
 
     /// A view of rows [start, start+n) along the first axis.

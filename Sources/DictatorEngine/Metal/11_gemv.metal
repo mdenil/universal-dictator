@@ -19,6 +19,9 @@ template <> inline float4 load4<ushort>(device const ushort* p) {
 template <typename T> struct WVec { static constant constexpr int N = 4; };
 template <> struct WVec<half> { static constant constexpr int N = 8; };
 template <> struct WVec<ushort> { static constant constexpr int N = 8; };
+template <> struct WVec<char> { static constant constexpr int N = 16; };
+
+inline float4 c4(uint u) { return float4(as_type<char4>(u)); }
 
 inline void load8(device const half* p, thread float4& a, thread float4& b) {
     uint4 v = *(device const uint4*)p;
@@ -29,6 +32,9 @@ inline void load8(device const ushort* p, thread float4& a, thread float4& b) {
     uint4 v = *(device const uint4*)p;
     a = float4(as_type<float>(v.x << 16), as_type<float>(v.x & 0xFFFF0000u), as_type<float>(v.y << 16), as_type<float>(v.y & 0xFFFF0000u));
     b = float4(as_type<float>(v.z << 16), as_type<float>(v.z & 0xFFFF0000u), as_type<float>(v.w << 16), as_type<float>(v.w & 0xFFFF0000u));
+}
+inline void load8(device const char* p, thread float4& a, thread float4& b) {
+    a = float4(*(device const char4*)p); b = float4(*(device const char4*)(p + 4));
 }
 inline void load8(device const float* p, thread float4& a, thread float4& b) {
     a = *(device const float4*)p; b = *(device const float4*)(p + 4);
@@ -43,6 +49,7 @@ kernel void gemv_nt(
     device const float* bias [[buffer(3)]],
     device const TC* R [[buffer(4)]],
     constant GemmParams& p [[buffer(5)]],
+    device const float* wscale [[buffer(6)]],
     uint tgp [[threadgroup_position_in_grid]],
     uint tid [[thread_index_in_threadgroup]],
     uint sg [[simdgroup_index_in_threadgroup]],
@@ -68,7 +75,16 @@ kernel void gemv_nt(
             int n = n0 + r;
             if (n >= p.N) break;
             device const TW* wr = W + (long)n * p.ldb + kb;
-            if (WVec<TW>::N == 8) {
+            if (WVec<TW>::N == 16) {
+                for (int k16 = int(lane); k16 < kl4 / 4; k16 += 32) {
+                    uint4 v = *(device const uint4*)((device const char*)wr + k16 * 16);
+                    float4 w0 = c4(v.x), w1 = c4(v.y), w2 = c4(v.z), w3 = c4(v.w);
+                    for (int m = 0; m < M; m++) {
+                        threadgroup const float4* x = xs + m * (GEMV_KB / 4) + 4 * k16;
+                        acc[r][m] += dot(w0, x[0]) + dot(w1, x[1]) + dot(w2, x[2]) + dot(w3, x[3]);
+                    }
+                }
+            } else if (WVec<TW>::N == 8) {
                 for (int k8 = int(lane); k8 < kl4 / 2; k8 += 32) {
                     float4 wa, wb;
                     load8(wr + k8 * 8, wa, wb);
@@ -92,6 +108,7 @@ kernel void gemv_nt(
             float v = simd_sum(acc[r][m]);
             if (lane == 0) {
                 v = p.alpha * v;
+                if (p.has_wscale) v *= wscale[n];
                 if (p.has_bias) v += bias[n];
                 v = apply_act(v, p.act) * p.out_scale;
                 if (p.has_residual) v += p.res_scale * to_f(R[(long)m * p.ldr + n]);
@@ -104,10 +121,11 @@ kernel void gemv_nt(
 #define INSTANTIATE_GEMV(NAME, TA, TW, TC) \
     template [[host_name(NAME)]] kernel void gemv_nt<TA, TW, TC>( \
         device const TA*, device const TW*, device TC*, device const float*, device const TC*, \
-        constant GemmParams&, uint, uint, uint, uint);
+        constant GemmParams&, device const float*, uint, uint, uint, uint);
 
 INSTANTIATE_GEMV("gemv_nt_f32_f32_f32", float, float, float)
 INSTANTIATE_GEMV("gemv_nt_f16_f16_f16", half, half, half)
 INSTANTIATE_GEMV("gemv_nt_f32_f16_f32", float, half, float)
 INSTANTIATE_GEMV("gemv_nt_f16_f16_f32", half, half, float)
 INSTANTIATE_GEMV("gemv_nt_f32_bf16_f32", float, ushort, float)
+INSTANTIATE_GEMV("gemv_nt_f32_i8_f32", float, char, float)

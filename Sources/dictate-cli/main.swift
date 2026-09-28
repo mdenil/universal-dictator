@@ -74,7 +74,8 @@ do {
         // voxtral <audio>: offline (reference-schedule) transcription with the full-precision weights.
         let audio = try AudioFile.readMono16k(URL(fileURLWithPath: args[1]))
         let t0 = Date()
-        let model = try VoxtralModel(modelDir: URL(fileURLWithPath: option("--model-dir", "models/Voxtral-Mini-4B-Realtime-2602")!))
+        let model = try VoxtralModel(modelDir: URL(fileURLWithPath: option("--model-dir", "models/Voxtral-Mini-4B-Realtime-2602")!),
+                                     weights: option("--weights", "model.safetensors")!)
         let load = Date().timeIntervalSince(t0)
         let sess = VoxtralSession(model: model)
         let t1 = Date()
@@ -142,6 +143,13 @@ do {
             if n % 100 == 0 { FileHandle.standardError.write("\(n) done\n".data(using: .utf8)!) }
         }
         try out.close()
+    case "convert" where args.count > 1 && args[1] == "voxtral":
+        // convert voxtral --quant dec-ffn,dec-attn,enc,adapter,stem --out dictator-q8.safetensors
+        let dir = URL(fileURLWithPath: option("--model-dir", "models/Voxtral-Mini-4B-Realtime-2602")!)
+        let groups = Set(option("--quant", "dec-ffn")!.split(separator: ",").map(String.init))
+        let dst = dir.appendingPathComponent(option("--out", "dictator-q8.safetensors")!)
+        let r = try WeightConverter.quantizeVoxtral(src: dir.appendingPathComponent("model.safetensors"), dst: dst, groups: groups)
+        print("wrote \(dst.path): \(r.quantized) int8 tensors, \(r.bytes / (1 << 20)) MB")
     case "convert":
         let model = args.count > 1 ? args[1] : "nemotron"
         let precision = WeightConverter.Precision(rawValue: option("--precision", "f16")!)!
