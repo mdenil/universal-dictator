@@ -1,0 +1,13 @@
+# Large or generated project material (kept in the repo folder, never committed)
+/models/
+/data/
+/third_party/
+/scratch/
+/artifacts/
+/.build/
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.xcodeproj/xcuserdata/
+DerivedData/

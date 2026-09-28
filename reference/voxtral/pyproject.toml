@@ -1,0 +1,18 @@
+[project]
+name = "dictator-reference-voxtral"
+version = "0.1.0"
+description = "Reference harness for Voxtral Mini 4B Realtime (transformers). Test infrastructure only."
+requires-python = "==3.12.*"
+dependencies = [
+    "transformers==5.17.0",
+    "mistral-common[audio]==1.12.0",
+    "torch",
+    "soundfile",
+    "numpy",
+    "jiwer",
+    "safetensors",
+    "accelerate",
+]
+
+[tool.uv]
+package = false
