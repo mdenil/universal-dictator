@@ -12,6 +12,8 @@ commands:
   eval         live-stream a manifest to jsonl (score with eval/score.py, eval/latency.py):
                eval --model nemotron-160|nemotron-560|parakeet|parakeet-h<H>|voxtral --manifest <jsonl> --out <jsonl>
                     [--precision f16|f32] [--weights dictator-q8.safetensors] [--limit N]
+  stream       live microphone transcription: stream --model nemotron-160|nemotron-560|parakeet-h4|voxtral
+  record       record the dictation test set: record eval/dictation_prompts.txt [--out data/dictation]
   convert      write converted weights: convert nemotron|parakeet --precision f16
   ladder       compare against golden tensors:
                ladder nemotron --golden <utt-dir> [--context 70,1] [--model-dir models/...]
@@ -194,6 +196,50 @@ do {
         try Probe.dumpNemotronStep(modelDir: URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b"), audio: audio,
                                    chunk: Int(option("--chunk", "50")!)!, lookahead: Int(option("--latency", "160")!)! / 80 - 1,
                                    out: URL(fileURLWithPath: option("--out", "scratch/stepdump")!))
+    case "stream":
+        // Live microphone transcription: stream --model nemotron-160|nemotron-560|parakeet-h4|voxtral
+        let make = try transcriberFactory(spec: option("--model", "nemotron-160")!)
+        let tr = make()
+        let q = DispatchQueue(label: "asr")
+        let mic = Microphone()
+        var last = ""
+        try mic.start { samples in
+            q.async {
+                tr.push(samples)
+                let t = tr.transcript
+                if t != last { last = t; print("\r\u{1B}[K" + t.suffix(150), terminator: ""); fflush(stdout) }
+            }
+        }
+        FileHandle.standardError.write("listening... press Return to stop\n".data(using: .utf8)!)
+        _ = readLine()
+        mic.stop()
+        q.sync { tr.finish() }
+        print("\n" + tr.transcript)
+    case "record":
+        // record <prompts.txt> --out data/dictation: shows each prompt, records until Return, saves
+        // <id>.wav and appends {"audio","text","duration"} to <out>/manifest.jsonl (resumable).
+        let prompts = try String(contentsOfFile: args[1], encoding: .utf8).split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        let outDir = URL(fileURLWithPath: option("--out", "data/dictation")!)
+        try FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        let manifest = outDir.appendingPathComponent("manifest.jsonl")
+        if !FileManager.default.fileExists(atPath: manifest.path) { FileManager.default.createFile(atPath: manifest.path, contents: nil) }
+        let done = (try? String(contentsOf: manifest, encoding: .utf8))?.split(separator: "\n").count ?? 0
+        for (i, prompt) in prompts.enumerated() where i >= done {
+            print("\n[\(i + 1)/\(prompts.count)] Read aloud, then press Return:\n  \(prompt)")
+            var buf = [Float]()
+            let lock = NSLock()
+            let mic = Microphone()
+            try mic.start { s in lock.lock(); buf += s; lock.unlock() }
+            _ = readLine()
+            mic.stop()
+            let wav = outDir.appendingPathComponent(String(format: "dict_%03d.wav", i))
+            try WAVWriter.write(buf, to: wav)
+            let rec: [String: Any] = ["audio": wav.path, "text": prompt, "duration": Double(buf.count) / 16000]
+            let fh = try FileHandle(forWritingTo: manifest); fh.seekToEndOfFile()
+            fh.write(try JSONSerialization.data(withJSONObject: rec, options: [.sortedKeys])); fh.write("\n".data(using: .utf8)!)
+            try fh.close()
+            print(String(format: "  saved %.1fs", Double(buf.count) / 16000))
+        }
     case "probe":
         let w = try? SafeTensorsFile(URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b/nemo_extracted/weights.safetensors"))
         if args.contains("rnnt") { try Probe.rnntDecoderCPU(modelDir: URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b")) } else if args.contains("gemm") { Probe.gemmShapes() } else if args.contains("voxtral") { Probe.voxtralShapes() } else { Probe.gemmSmallM(weights: w) }
