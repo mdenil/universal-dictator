@@ -166,16 +166,16 @@ extension WeightConverter {
             let e = f.entries[name]!
             if let g = group(name), groups.contains(g), q4.contains(g) {
                 let rows = e.shape[0], cols = e.shape.dropFirst().reduce(1, *)
-                var cache: (p: [UInt8], s: [Float16])?
-                func get() throws -> (p: [UInt8], s: [Float16]) {
+                var cache: (packed: [UInt8], scale: [Float16])?
+                func get() throws -> (packed: [UInt8], scale: [Float16]) {
                     if let c = cache { return c }
                     let x = try f.floats(name)
                     cache = x.withUnsafeBufferPointer { Quant.quantizeRowsQ4($0, rows: rows, cols: cols) }
                     return cache!
                 }
-                w.addLazy(name, dtype: .u8, shape: [rows, cols / 2], bytes: rows * cols / 2) { try get().p.withUnsafeBytes { Data($0) } }
+                w.addLazy(name, dtype: .u8, shape: [rows, cols / 2], bytes: rows * cols / 2) { try get().packed.withUnsafeBytes { Data($0) } }
                 w.addLazy(name + ".q4scale", dtype: .f16, shape: [rows, cols / 64], bytes: rows * cols / 64 * 2) {
-                    let d = try get().s.withUnsafeBytes { Data($0) }; cache = nil; return d
+                    let d = try get().scale.withUnsafeBytes { Data($0) }; cache = nil; return d
                 }
                 nq += 1
                 bytes += rows * cols / 2 + rows * cols / 32
