@@ -117,6 +117,8 @@ public final class VoxtralModel {
     let enc: [EncLayer]
     let dec: [DecLayer]
     let embed, decNorm: Tensor
+    /// Output head: the tied embedding, or a separately quantized copy ("lm_head.weight") if present.
+    let head: Tensor
     let encInvFreq, decInvFreq: Tensor
 
     public init(modelDir: URL, weights: String = "model.safetensors", delayMs: Int = 480, ctx: MetalContext = .shared) throws {
@@ -169,6 +171,7 @@ public final class VoxtralModel {
         }
         dec = decs
         embed = try t("language_model.model.embed_tokens.weight")
+        head = wf.has("lm_head.weight") ? try t("lm_head.weight") : embed
         decNorm = try f32("language_model.model.norm.weight")
         func invFreq(_ d: Int) -> Tensor {
             Tensor.from((0..<(d / 2)).map { Float(1.0 / pow(1e6, Double(2 * $0) / Double(d))) }, shape: [d / 2], dtype: .f32, cx)
@@ -373,7 +376,7 @@ public final class VoxtralSession {
         let last = Tensor(ctx, shape: [1, m.decDim])
         s.rmsNorm(x.rows(M - 1, 1), gamma: m.decNorm, out: last)
         let logits = Tensor(ctx, shape: [1, m.vocab])
-        s.gemm(last, m.embed, out: logits)
+        s.gemm(last, m.head, out: logits)
         let idx = Tensor(ctx, shape: [1], dtype: .i32), val = Tensor(ctx, shape: [1])
         s.argmax(logits, idx: idx, val: val)
         return (idx, logits)

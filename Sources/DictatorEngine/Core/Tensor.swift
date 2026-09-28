@@ -3,12 +3,15 @@ import Metal
 
 public enum DType: String {
     case f32, f16, bf16, i32, i8, u8
+    /// Packed 4-bit weights, two per byte; logical shape [N, K], storage N*K/2 bytes, with
+    /// `qscale` holding f16 scales [N, K/64] (symmetric, value = (nibble - 8) * scale).
+    case q4
 
     public var size: Int {
         switch self {
         case .f32, .i32: return 4
         case .f16, .bf16: return 2
-        case .i8, .u8: return 1
+        case .i8, .u8, .q4: return 1
         }
     }
 }
@@ -35,11 +38,12 @@ public final class Tensor {
     }
 
     public var count: Int { shape.reduce(1, *) }
-    public var byteCount: Int { count * dtype.size }
+    public var byteCount: Int { dtype == .q4 ? count / 2 : count * dtype.size }
 
     /// Same storage, new shape (element count must match).
     public func reshaped(_ newShape: [Int]) -> Tensor {
         precondition(newShape.reduce(1, *) == count, "reshape \(shape) -> \(newShape)")
+        precondition(dtype != .q4 || newShape.last == shape.last, "q4 tensors keep their row length")
         let t = Tensor(buffer: buffer, offset: offset, shape: newShape, dtype: dtype)
         t.qscale = qscale
         return t
@@ -75,6 +79,8 @@ public final class Tensor {
         case .u8:
             let p = contents.assumingMemoryBound(to: UInt8.self)
             return (0..<n).map { Float(p[$0]) }
+        case .q4:
+            fatalError("toFloats on packed q4")
         }
     }
 

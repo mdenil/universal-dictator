@@ -92,6 +92,12 @@ public final class SafeTensorsFile {
         let abs = dataStart + e.begin
         let len = e.end - e.begin
         let (buf, off) = try window(containing: abs, length: len)
+        if e.dtype == .u8, entries[name + ".q4scale"] != nil {
+            // Packed int4: stored [N, K/2] bytes, logical [N, K].
+            let t = Tensor(buffer: buf, offset: off, shape: [e.shape[0], e.shape[1] * 2], dtype: .q4)
+            t.qscale = try tensor(name + ".q4scale")
+            return t
+        }
         let t = Tensor(buffer: buf, offset: off, shape: e.shape, dtype: e.dtype)
         if e.dtype == .i8, entries[name + ".qscale"] != nil { t.qscale = try tensor(name + ".qscale") }
         return t

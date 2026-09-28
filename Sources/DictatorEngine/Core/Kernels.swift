@@ -87,6 +87,28 @@ extension Step {
         let K = a.shape.last!
         let M = a.count / K
         let N = w.shape[0]
+        if w.dtype == .q4 {
+            // 4-bit weights run through the GEMV kernel in slices of 8 activation rows.
+            precondition(a.dtype == .f32 && out.dtype == .f32 && K % 64 == 0, "q4 gemm: f32 activations, K % 64 == 0")
+            var r0 = 0
+            while r0 < M {
+                let m = min(8, M - r0)
+                let a2 = a.reshaped([M, K]).rows(r0, m), o2 = out.reshaped([M, N]).rows(r0, m)
+                let r2 = residual.map { $0.reshaped([M, N]).rows(r0, m) }
+                var params = GemmParams(M: Int32(m), N: Int32(N), K: Int32(K), lda: Int32(K), ldb: Int32(K), ldc: Int32(N),
+                                        hasBias: bias == nil ? 0 : 1, act: act.rawValue, hasResidual: r2 == nil ? 0 : 1, ldr: Int32(N),
+                                        alpha: alpha, resScale: resScale, outScale: outScale, hasWScale: 1)
+                bind(a2, 0); bind(w, 1); bind(o2, 2)
+                if let b = bias { bind(b, 3) } else { bind(o2, 3) }
+                if let r = r2 { bind(r, 4) } else { bind(o2, 4) }
+                enc.setBytes(&params, length: MemoryLayout<GemmParams>.stride, index: 5)
+                bind(w.qscale!, 6)
+                dispatch(try! ctx.pipeline("gemv_q4_f32"), threadgroups: MTLSize(width: (N + 15) / 16, height: 1, depth: 1),
+                         threads: MTLSize(width: 128, height: 1, depth: 1))
+                r0 += m
+            }
+            return
+        }
         precondition(w.shape.count == 2 && w.shape[1] == K, "gemm: a \(a.shape) w \(w.shape)")
         precondition(out.count == M * N, "gemm: out \(out.shape) expected \(M)x\(N)")
         let types = "\(dtypeTag(a.dtype))_\(dtypeTag(w.dtype))_\(dtypeTag(out.dtype))"
