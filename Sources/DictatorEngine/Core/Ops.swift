@@ -127,3 +127,64 @@ extension Step {
         dispatch1D(p, count: src.count)
     }
 }
+
+struct Im2ColParams { var Tin: Int32, C: Int32, K: Int32, stride: Int32, pad: Int32, Tout: Int32 }
+struct RopeParams { var T: Int32, H: Int32, d: Int32, ld: Int32, pos0: Int32 }
+struct AttnParams { var Tq: Int32, Tk: Int32, Hq: Int32, Hkv: Int32, d: Int32, ldq: Int32, ldk: Int32, ldo: Int32; var scale: Float }
+
+extension Step {
+    /// Causal conv1d input expansion: x [Tin, C] -> out [Tout, C*K].
+    public func im2col1d(_ x: Tensor, out: Tensor, K: Int, stride: Int, pad: Int) {
+        let (Tin, C) = (x.shape[0], x.shape[1])
+        let Tout = out.shape[0]
+        let p = try! ctx.pipeline("im2col1d")
+        bind(x, 0); bind(out, 1)
+        setBytes(Im2ColParams(Tin: Int32(Tin), C: Int32(C), K: Int32(K), stride: Int32(stride), pad: Int32(pad), Tout: Int32(Tout)), 2)
+        enc.setComputePipelineState(p)
+        enc.dispatchThreads(MTLSize(width: C * K, height: Tout, depth: 1), threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+    }
+
+    /// In-place rotate-half RoPE on x [T, H*d] (row stride = last dim) for positions pos0 ..< pos0 + T.
+    public func rope(_ x: Tensor, heads H: Int, headDim d: Int, invFreq: Tensor, pos0: Int) {
+        let ld = x.shape.last!, T = x.count / ld
+        let p = try! ctx.pipeline("rope_rotate_half")
+        bind(x, 0); bind(invFreq, 1)
+        setBytes(RopeParams(T: Int32(T), H: Int32(H), d: Int32(d), ld: Int32(ld), pos0: Int32(pos0)), 2)
+        enc.setComputePipelineState(p)
+        enc.dispatchThreads(MTLSize(width: d / 2, height: H, depth: T), threadsPerThreadgroup: MTLSize(width: d / 2, height: 1, depth: 1))
+    }
+
+    /// Grouped-query attention with per-query key ranges. q [Tq, Hq*d], k/v [Tk, Hkv*d], out [Tq, Hq*d].
+    public func attention(q: Tensor, k: Tensor, v: Tensor, ranges: Tensor, out: Tensor, heads Hq: Int, kvHeads Hkv: Int, headDim d: Int) {
+        let Tq = q.count / (Hq * d), Tk = k.count / (Hkv * d)
+        let p = try! ctx.pipeline(k.dtype == .f16 ? "attention_gqa_f16" : "attention_gqa_f32")
+        bind(q, 0); bind(k, 1); bind(v, 2); bind(ranges, 3); bind(out, 4)
+        setBytes(AttnParams(Tq: Int32(Tq), Tk: Int32(Tk), Hq: Int32(Hq), Hkv: Int32(Hkv), d: Int32(d), ldq: Int32(Hq * d),
+                            ldk: Int32(Hkv * d), ldo: Int32(Hq * d), scale: 1 / Float(d).squareRoot()), 5)
+        dispatch(p, threadgroups: MTLSize(width: Tq, height: Hq, depth: 1), threads: MTLSize(width: max(d, 32), height: 1, depth: 1))
+    }
+
+    public func swiglu(gate: Tensor, up: Tensor, out: Tensor) {
+        let p = try! ctx.pipeline("swiglu")
+        bind(gate, 0); bind(up, 1); bind(out, 2)
+        dispatch1D(p, count: out.count)
+    }
+
+    /// out[t] = table[ids[t]] (+ audio[t]); table bf16 [V, D].
+    public func embed(table: Tensor, ids: Tensor, audio: Tensor?, out: Tensor) {
+        let D = table.shape[1], T = ids.count
+        let p = try! ctx.pipeline("embed_add_bf16")
+        bind(table, 0); bind(ids, 1); bind(audio ?? out, 2); bind(out, 3)
+        setBytes(Int32(D), 4); setBytes(Int32(audio == nil ? 0 : 1), 5)
+        enc.setComputePipelineState(p)
+        enc.dispatchThreads(MTLSize(width: D, height: T, depth: 1), threadsPerThreadgroup: MTLSize(width: 256, height: 1, depth: 1))
+    }
+
+    /// Row-wise argmax of x [rows, N] into idx (i32) and val (f32).
+    public func argmax(_ x: Tensor, idx: Tensor, val: Tensor) {
+        let N = x.shape.last!, rows = x.count / N
+        let p = try! ctx.pipeline("argmax_rows")
+        bind(x, 0); bind(idx, 1); bind(val, 2); setBytes(Int32(N), 3)
+        dispatch(p, threadgroups: MTLSize(width: rows, height: 1, depth: 1), threads: MTLSize(width: 1024, height: 1, depth: 1))
+    }
+}

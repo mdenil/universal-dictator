@@ -200,7 +200,7 @@ Every streaming frame outside the final chunk equals the offline frame up to fp3
 
 The final chunk differs. Two source behaviours cause this:
 
-1. The buffer counts mel frame `N//160` as valid (§1), and that frame is always 0.0. The frames of the last chunk that see it differ from offline, where the frame is masked. The difference is up to 0.28 max-abs in the last 1 frame at [70,1], and up to 5 frames at [70,6].
+1. The buffer counts mel frame `N//160` as valid (§1), and that frame is always 0.0. The frames of the last chunk that see it differ from offline, where the frame is masked. The difference is up to 0.28 max-abs in the last 2 frames at [70,1], and in the last 6 frames at [70,6].
 2. `__iter__` **stops** when the remaining piece is shorter than `sampling_frames[1] = 8` mel frames (`streaming_utils.py:1628-1638`). So up to 7 trailing mel frames are never encoded.
 
 So the streaming output can have one more or one fewer encoder frame than offline. Offline has `calc_length(N//160)` frames. On dev20 at [70,1], 6 of 20 utterances lose their final token(s) because of this. Five lose the final `.`. One (`6432-63722-0000`) ends "…givin up fis" instead of "…givin up fishing." (§10).
@@ -284,7 +284,7 @@ NeMo `state_dict` names (`models/nemotron-speech-streaming-en-0.6b/nemo_extracte
 Other traps:
 - There are 26 tensors per encoder layer: no biases in the layer Linears or Conv1ds (`use_bias: false`), but all LayerNorms have a bias.
 - There is no BatchNorm to fold (unlike Parakeet).
-- `nemo_extracted/weights.safetensors` and the HF `model.safetensors` were written by other tools. The goldens here come from the `.nemo` loaded by NeMo.
+- `nemo_extracted/weights.safetensors` and the HF `model.safetensors` were written by other tools. The goldens here come from the `.nemo` loaded by NeMo. Checked: with the mapping in the table above, all 651 HF tensors exist, and each is **bit-identical** to its `nemo_extracted` counterpart. No HF tensor is left unmapped.
 
 ## 9. Open questions (resolved)
 
@@ -292,3 +292,29 @@ Other traps:
 2. **Causal subsampling padding.** `CausalConv2D` pads `(left=2, right=1)` on **both** time and frequency (`F.pad(x, (2,1,2,1))`, `causal_convs.py:46-47, 67`), so frequency goes 128 → 65 → 33 → 17 (Linear in = 4352). Only the three 3×3 convs are causal; the 1×1 convs are plain. Time rows beyond the running length are zeroed before every layer (`subsampling.py:725-759`). The streaming step keeps 9 mel frames of pre-encode cache and drops the first 2 subsampled frames (`conformer_encoder.py:636-638, 1015-1023`). [verified]
 3. **Whether the sherpa-onnx exports use the March checkpoint.** Very probably yes. The sherpa-onnx export script loads `ASRModel.from_pretrained("nvidia/nemotron-speech-streaming-en-0.6b")` with no revision (`scripts/nemo/nemotron-speech-streaming-en-0.6b/export_onnx.py:55-57`). The export repos were created on 2026-04-25, and HF `main`'s `.nemo` has been the March checkpoint since 2026-03-13 (commit `2ea504f`, unchanged through the pinned `ebe59e5`). This is inferred from dates and has not been checked by comparing ONNX weights.
 4. **Which lookahead is the default?** `[70,13]`, not 160 or 560 ms (`conformer_encoder.py:908`). The reference scripts must set it.
+
+## 10. Noise floor (measured)
+
+Envelope file: `data/golden/nemotron/noise_floor.json` (written by `reference/nemo/noise_floor.py`). Every number is the worst case over the 20 dev utterances in `data/dev/dev20.jsonl`, on CPU in fp32.
+
+**Thread-count spread** (threads=1 vs threads=8, same code and input). "Relative" means max-abs / max|tensor|.
+
+| Tensor | [70,1] max-abs | [70,1] relative | [70,6] max-abs | [70,6] relative |
+|---|---|---|---|---|
+| mel, pre_encode | 0 (bit-identical) | 0 | 0 | 0 |
+| layer_00_out | 7.6e-6 | 2.1e-8 | 3.8e-6 | 1.1e-8 |
+| worst layer output (layer 21 / 22; values reach ±183) | 2.8e-3 | 1.6e-5 | 2.0e-4 | 1.1e-6 |
+| enc_out (layer 23, after LN) | 3.9e-6 | 1.1e-5 | 2.0e-6 | 7.4e-6 |
+| raw joint logits (first 20 emissions) | 2.1e-4 | 1.3e-6 | 2.4e-4 | 1.8e-6 |
+
+Tokens: identical on 20/20 utterances at both configs. The argmax of the first 20 joint steps was identical everywhere. Cosine similarity ≥ 0.999999999997 for every tensor.
+
+**Spec re-implementation vs reference** (`check_spec.py`, first 3 utterances per config, each stage fed the golden input): mel, pre_encode, pos_emb and att_mask are bit-identical. Layer outputs match to ≤ 1.4e-4 max-abs (≤ 8.7e-7 relative), and tokens are identical. That is inside the thread spread, so the spec in §1–§7 is complete at fp32 resolution.
+
+**Offline vs official cache-aware streaming** (`stream_<cfg>/…/stream_enc_out.npy` vs `offline_<cfg>/…/enc_out.npy`):
+
+- Every frame before the final chunk: ≤ 9.6e-6 max-abs ([70,1]) and ≤ 5.6e-6 ([70,6]). That is thread-spread level.
+- Final chunk: up to 0.28 max-abs, confined to the last 2 frames at [70,1] and the last 6 frames at [70,6]. There are frame-count differences of ±1 (7 utterances at [70,1], 2 at [70,6]). The causes are in §6.4.
+- Tokens equal: 14/20 at [70,1] (the other 6 lose their final `.` or, in one case, "hing."), and 20/20 at [70,6].
+
+A tolerance for kernel parity (L1–L3) should be derived from the thread-spread row: about 1e-5 relative on layer outputs and 2e-6 relative on logits. The streaming-vs-offline envelope holds only away from the final chunk.

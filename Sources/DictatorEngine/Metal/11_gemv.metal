@@ -15,7 +15,26 @@ template <> inline float4 load4<ushort>(device const ushort* p) {
     return float4(bf16_to_float(b.x), bf16_to_float(b.y), bf16_to_float(b.z), bf16_to_float(b.w));
 }
 
-// Requires K % 4 == 0 and rows 16-byte aligned for the vector loads.
+// 16-byte weight loads: 8 elements for 2-byte types, 4 for float.
+template <typename T> struct WVec { static constant constexpr int N = 4; };
+template <> struct WVec<half> { static constant constexpr int N = 8; };
+template <> struct WVec<ushort> { static constant constexpr int N = 8; };
+
+inline void load8(device const half* p, thread float4& a, thread float4& b) {
+    uint4 v = *(device const uint4*)p;
+    a = float4(float2(as_type<half2>(v.x)), float2(as_type<half2>(v.y)));
+    b = float4(float2(as_type<half2>(v.z)), float2(as_type<half2>(v.w)));
+}
+inline void load8(device const ushort* p, thread float4& a, thread float4& b) {
+    uint4 v = *(device const uint4*)p;
+    a = float4(as_type<float>(v.x << 16), as_type<float>(v.x & 0xFFFF0000u), as_type<float>(v.y << 16), as_type<float>(v.y & 0xFFFF0000u));
+    b = float4(as_type<float>(v.z << 16), as_type<float>(v.z & 0xFFFF0000u), as_type<float>(v.w << 16), as_type<float>(v.w & 0xFFFF0000u));
+}
+inline void load8(device const float* p, thread float4& a, thread float4& b) {
+    a = *(device const float4*)p; b = *(device const float4*)(p + 4);
+}
+
+// Requires K % 4 == 0 and rows 16-byte aligned for the vector loads (K % 8 == 0 for 2-byte weights).
 template <typename TA, typename TW, typename TC>
 kernel void gemv_nt(
     device const TA* A [[buffer(0)]],
@@ -49,9 +68,18 @@ kernel void gemv_nt(
             int n = n0 + r;
             if (n >= p.N) break;
             device const TW* wr = W + (long)n * p.ldb + kb;
-            for (int k4 = int(lane); k4 < kl4; k4 += 32) {
-                float4 w = load4(wr + k4 * 4);
-                for (int m = 0; m < M; m++) acc[r][m] += dot(w, xs[m * (GEMV_KB / 4) + k4]);
+            if (WVec<TW>::N == 8) {
+                for (int k8 = int(lane); k8 < kl4 / 2; k8 += 32) {
+                    float4 wa, wb;
+                    load8(wr + k8 * 8, wa, wb);
+                    for (int m = 0; m < M; m++)
+                        acc[r][m] += dot(wa, xs[m * (GEMV_KB / 4) + 2 * k8]) + dot(wb, xs[m * (GEMV_KB / 4) + 2 * k8 + 1]);
+                }
+            } else {
+                for (int k4 = int(lane); k4 < kl4; k4 += 32) {
+                    float4 w = load4(wr + k4 * 4);
+                    for (int m = 0; m < M; m++) acc[r][m] += dot(w, xs[m * (GEMV_KB / 4) + k4]);
+                }
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);

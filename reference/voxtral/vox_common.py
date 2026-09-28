@@ -145,6 +145,14 @@ def load_model(device: str = "cpu", precision: str = "fp32", attn: str = "sdpa")
         str(MODEL_DIR), dtype=torch.bfloat16, device_map=device, attn_implementation=attn
     )
     model.eval()
+    if device == "cpu":
+        # from_pretrained leaves CPU weights as views of the mmap'd safetensors file. Under memory
+        # pressure macOS drops those clean file pages and re-reads them from disk on every step
+        # (measured: the per-step weight upcast ran ~5x slower than on resident memory). Copy them
+        # into anonymous memory once (same 8.86 GB, bf16).
+        with torch.no_grad():
+            for prm in model.parameters():
+                prm.data = prm.data.clone()
     buffers_before = {
         "time_embedding.inv_freq": str(model.model.time_embedding.inv_freq.dtype),
         "audio_rotary.inv_freq": str(model.model.audio_tower.rotary_emb.inv_freq.dtype),

@@ -70,6 +70,25 @@ do {
         FileHandle.standardError.write(String(format: "load %.2fs | %d steps of %d ms | audio %.2fs, wall %.3fs (RTF %.4f) | per-step wall p50 %.2f ms p99 %.2f ms\n",
             load, w.count, chunkMs, Double(audio.count) / 16000, wall, wall / (Double(audio.count) / 16000),
             w[w.count / 2] * 1000, w[min(w.count - 1, w.count * 99 / 100)] * 1000).data(using: .utf8)!)
+    case "voxtral":
+        // voxtral <audio>: offline (reference-schedule) transcription with the full-precision weights.
+        let audio = try AudioFile.readMono16k(URL(fileURLWithPath: args[1]))
+        let t0 = Date()
+        let model = try VoxtralModel(modelDir: URL(fileURLWithPath: option("--model-dir", "models/Voxtral-Mini-4B-Realtime-2602")!))
+        let load = Date().timeIntervalSince(t0)
+        let sess = VoxtralSession(model: model)
+        let t1 = Date()
+        let text = sess.transcribeOffline(audio)
+        let wall = Date().timeIntervalSince(t1)
+        print(text)
+        let st = sess.stepTimes.dropFirst().sorted()
+        FileHandle.standardError.write(String(format: "load %.2fs | prefill %.1f ms | %d steps, p50 %.1f ms p99 %.1f ms | audio %.2fs wall %.2fs | tokens %@\n",
+            load, sess.stepTimes[0] * 1000, st.count, st.isEmpty ? 0 : st[st.count / 2] * 1000, st.isEmpty ? 0 : st[st.count * 99 / 100] * 1000,
+            Double(audio.count) / 16000, wall, sess.emitted.map(String.init).joined(separator: ",")).data(using: .utf8)!)
+        if !sess.splitTimes.isEmpty {
+            let e = sess.splitTimes.map { $0.enc }.sorted(), d = sess.splitTimes.map { $0.dec }.sorted()
+            FileHandle.standardError.write(String(format: "GPU per step: encoder p50 %.1f ms, decoder p50 %.1f ms\n", e[e.count / 2] * 1000, d[d.count / 2] * 1000).data(using: .utf8)!)
+        }
     case "eval":
         // Transcribes every manifest line with the streaming engine; resumable (skips done lines).
         guard let kind = NemoModelKind(rawValue: option("--model", "nemotron")!) else { throw EngineError.io("unknown --model") }
@@ -133,7 +152,7 @@ do {
         print("wrote \(dst.path): \(r.tensors) tensors, \(r.bytes / (1 << 20)) MB")
     case "probe":
         let w = try? SafeTensorsFile(URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b/nemo_extracted/weights.safetensors"))
-        if args.contains("gemm") { Probe.gemmShapes() } else { Probe.gemmSmallM(weights: w) }
+        if args.contains("gemm") { Probe.gemmShapes() } else if args.contains("voxtral") { Probe.voxtralShapes() } else { Probe.gemmSmallM(weights: w) }
     case "ladder":
         guard let kind = NemoModelKind(rawValue: args.count > 1 ? args[1] : "nemotron") else { throw EngineError.io("ladder: unknown model") }
         let ctxParts = option("--context", kind == .nemotron ? "70,1" : "70,2,5")!.split(separator: ",").map { Int($0)! }

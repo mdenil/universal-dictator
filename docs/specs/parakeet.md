@@ -146,3 +146,21 @@ Everything else (norm names, `pos_bias_u/v`, LSTM, embed, joint, `preprocessor.f
 2. **Parakeet DCC behaviour.** At inference, `conv_context_style: dcc` does nothing. It is stored and never read (`c42:conformer_encoder.py:358-359`; the same holds on `main` 1f73a91). The depthwise conv is a symmetric k=9 conv over the whole input (buffer or utterance), not masked at chunk boundaries. DCC was a training-time technique (arXiv 2304.09325, cited by the card). The training code is not released ("We will release the unified training pipeline soon", model card). So there is nothing to port. The effect is that the effective lookahead in offline-with-mask mode exceeds the 5-frame attention right context, while the buffered pipeline truncates it at the buffer end (§5).
 3. **Which NeMo can run it?** Not 2.7.3 as released (§0). The reference uses 2.7.3 plus the verbatim `c42e444` encoder methods.
 4. **Default attention context.** Full context `[-1,-1,-1]` (§4). The [70,2,5] mask must be set explicitly.
+
+## 10. Noise floor (measured)
+
+Envelope file: `data/golden/parakeet/noise_floor.json`. Every number is the worst case over the 20 dev utterances, on CPU in fp32, for `offline_70_2_5`.
+
+**Thread-count spread** (threads=1 vs threads=8):
+
+| Tensor | max-abs | relative (max-abs / max\|tensor\|) |
+|---|---|---|
+| mel (normalized), pre_encode | 0 (bit-identical) | 0 |
+| layer_00_out | 3.8e-6 | 7.0e-8 |
+| worst layer output (layer 21; values reach ±150) | 6.2e-3 | 4.3e-5 |
+| enc_out | 3.5e-6 | 1.2e-6 |
+| raw joint logits (first 20 emissions) | 4.2e-5 | 9.4e-7 |
+
+Tokens: identical on 20/20 utterances. The argmax of the first 20 joint steps was identical everywhere.
+
+**Spec re-implementation vs reference** (`check_spec.py`, 3 utterances): the normalized mel matches to 2.4e-6 max-abs (the per-bin mean/std reduction order differs). pre_encode, enc_in (×32), pos_emb and att_mask are bit-identical. Layer outputs match to ≤ 3.1e-5 max-abs (≤ 3.7e-7 relative), and tokens are identical.

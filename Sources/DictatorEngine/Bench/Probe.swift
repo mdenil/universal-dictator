@@ -55,3 +55,23 @@ extension Probe {
         }
     }
 }
+
+extension Probe {
+    /// Voxtral step shapes: bf16 weights, small M (GPU time per call, back to back x16).
+    public static func voxtralShapes() {
+        let ctx = MetalContext.shared
+        let shapes: [(String, Int, Int, Int)] = [
+            ("enc q 4x2048x1280", 4, 2048, 1280), ("enc gate 4x5120x1280", 4, 5120, 1280), ("enc down 4x1280x5120", 4, 1280, 5120),
+            ("conv2 4x1280x3840", 4, 1280, 3840), ("dec q 1x4096x3072", 1, 4096, 3072), ("dec gate 1x9216x3072", 1, 9216, 3072),
+            ("dec down 1x3072x9216", 1, 3072, 9216), ("head 1x131072x3072", 1, 131072, 3072)]
+        for (name, M, N, K) in shapes {
+            for wdt in [DType.bf16, DType.f16] {
+                let a = Tensor(ctx, shape: [M, K]), w = Tensor(ctx, shape: [N, K], dtype: wdt), c = Tensor(ctx, shape: [M, N])
+                var best = Double.infinity
+                for _ in 0..<5 { let s = Step(ctx); for _ in 0..<16 { s.gemm(a, w, out: c) }; best = min(best, s.run() / 16) }
+                let gbs = Double(N * K * wdt.size) / best / 1e9
+                print(String(format: "%-26@ %@  %8.3f ms  %6.1f GB/s", name as NSString, wdt.rawValue as NSString, best * 1000, gbs))
+            }
+        }
+    }
+}

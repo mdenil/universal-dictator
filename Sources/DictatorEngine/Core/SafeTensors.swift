@@ -96,17 +96,40 @@ public final class SafeTensorsFile {
     }
 
     private func window(containing abs: Int, length: Int) throws -> (MTLBuffer, Int) {
+        if buffers.isEmpty { try buildWindows() }
         for w in buffers where abs >= w.start && abs + length <= w.start + w.length {
             return (w.buffer, abs - w.start)
         }
+        throw EngineError.io("no window covers [\(abs), \(abs + length))")
+    }
+
+    /// Partitions the file into non-overlapping page-aligned Metal buffers, greedily in file order,
+    /// each at most `maxBufferLength` long and never splitting a tensor. (Overlapping windows made
+    /// the GPU account for the same pages several times and run out of memory.)
+    private func buildWindows() throws {
         let page = Int(getpagesize())
-        let windowSize = min(ctx.device.maxBufferLength / page * page, 1 << 30)
-        let start = abs / page * page
-        let end = min(max(start + windowSize, (abs + length + page - 1) / page * page), mappedLength)
-        guard let b = ctx.device.makeBuffer(bytesNoCopy: base + start, length: end - start, options: .storageModeShared, deallocator: nil) else {
-            throw EngineError.io("makeBuffer(bytesNoCopy) failed for window at \(start)")
+        let limit = ctx.device.maxBufferLength / page * page
+        let spans = entries.values.map { (dataStart + $0.begin, dataStart + $0.end) }.sorted { $0.0 < $1.0 }
+        var start = 0
+        var end = 0
+        func flush() throws {
+            let s0 = start / page * page
+            let e0 = min((end + page - 1) / page * page, mappedLength)
+            guard e0 > s0 else { return }
+            guard let b = ctx.device.makeBuffer(bytesNoCopy: base + s0, length: e0 - s0, options: .storageModeShared, deallocator: nil) else {
+                throw EngineError.io("makeBuffer(bytesNoCopy) failed for window at \(s0) length \(e0 - s0)")
+            }
+            buffers.append((s0, e0 - s0, b))
         }
-        buffers.append((start, end - start, b))
-        return (b, abs - start)
+        for (b, e) in spans {
+            let s0 = start / page * page
+            if e - s0 > limit && end > start {
+                try flush()
+                start = (end + page - 1) / page * page
+                if b < start { start = b / page * page }  // shared page: window starts at the tensor's page
+            }
+            end = max(end, e)
+        }
+        try flush()
     }
 }
