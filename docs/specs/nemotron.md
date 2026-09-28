@@ -318,3 +318,34 @@ Tokens: identical on 20/20 utterances at both configs. The argmax of the first 2
 - Tokens equal: 14/20 at [70,1] (the other 6 lose their final `.` or, in one case, "hing."), and 20/20 at [70,6].
 
 A tolerance for kernel parity (L1–L3) should be derived from the thread-spread row: about 1e-5 relative on layer outputs and 2e-6 relative on logits. The streaming-vs-offline envelope holds only away from the final chunk.
+
+## 11. Reference WER (measured)
+
+Setup:
+- **Pipeline:** the official cache-aware script, unmodified (`ca_infer.py`, v2.7.3), run through `reference/nemo/run_official.py`.
+- **Hardware and batching:** MPS in fp32, `batch_size=32`.
+- **Scoring:** `whisper_normalizer` 0.1.15 `EnglishTextNormalizer` on both sides (the card uses 0.1.12), then corpus WER with jiwer.
+- **Why a subset:** full sets were not run. The measured throughput was 4.4× real time at [70,1] on MPS. On CPU at batch 32, the first 32-utterance batch of a 64-utterance trial had not finished after 17 min, so that run was stopped. Each full set would take about 75 min at [70,1] on a machine shared with another agent's jobs.
+- **Subset:** a **fixed random subset of 500 utterances per set** (`random.Random(0).sample`, see `wer.py --limit 500`), written to the NeMo manifest sorted longest first so that batches hold similar lengths.
+
+| Config | Set (500 utts) | Audio | Our WER | Card WER | S / D / I | Ref words |
+|---|---|---|---|---|---|---|
+| [70,1] 160 ms | test-clean | 0.99 h | **2.70%** | 2.56% | 196 / 29 / 36 | 9672 |
+| [70,1] 160 ms | test-other | 0.89 h | **5.37%** | 5.57% | 359 / 67 / 49 | 8844 |
+| [70,6] 560 ms | test-clean | 0.99 h | **2.45%** | 2.46% | 184 / 25 / 28 | 9672 |
+| [70,6] 560 ms | test-other | 0.89 h | **4.83%** | 5.07% | 328 / 53 / 46 | 8844 |
+
+All four are within about ±0.25 abs of the card, which is the size of the sampling error of a 500-utterance subset (the per-word binomial standard error alone is ≈0.16 on test-clean and ≈0.24 on test-other). The ordering [70,6] < [70,1] is reproduced. This matches the published figures to within the resolution of the subset. It is not a full-set confirmation.
+
+Batching caveat, measured on dev20: with `batch_size=32`, 7 of 20 [70,1] transcripts differ from the batch-1 CPU goldens. In each case the batched run **keeps** the final token(s) that batch-1 streaming drops (§6.4). In a batch, shorter streams are zero-padded by longer ones, so the buffer's "remaining < 8 frames → stop" rule only truncates the longest stream. At [70,6], 20/20 were identical. Batch-1 streaming is therefore slightly pessimistic at utterance ends. After normalization this costs at most one word per affected utterance ("fishing" → "fis" in one case).
+
+Commands (each run takes the model lock):
+
+```
+scripts/heavy.sh reference/nemo/.venv/bin/python reference/nemo/wer.py --model nemotron --config 70_1 --set test-clean --limit 500 --device mps
+scripts/heavy.sh reference/nemo/.venv/bin/python reference/nemo/wer.py --model nemotron --config 70_1 --set test-other --limit 500 --device mps
+scripts/heavy.sh reference/nemo/.venv/bin/python reference/nemo/wer.py --model nemotron --config 70_6 --set test-clean --limit 500 --device mps
+scripts/heavy.sh reference/nemo/.venv/bin/python reference/nemo/wer.py --model nemotron --config 70_6 --set test-other --limit 500 --device mps
+```
+
+Each writes `data/wer/nemotron_<cfg>_mps/<set>_subset500/{manifest.nemo.jsonl, streaming_out_*.json, result.json}`. `result.json` records the exact official-script command line. Dev20 (same pipeline): 6.80% ([70,1]) and 6.26% ([70,6]).

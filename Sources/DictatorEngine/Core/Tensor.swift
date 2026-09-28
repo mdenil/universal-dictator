@@ -115,3 +115,19 @@ public func bf16Bits(_ f: Float) -> UInt16 {
     let rounding = ((u >> 16) & 1) &+ 0x7FFF
     return UInt16((u &+ rounding) >> 16)
 }
+
+/// Named scratch buffers reused across steps (grown when a larger size is requested). Views of these
+/// are only valid until the same name is requested again, so a step must not hold one across steps.
+public final class Scratch {
+    let ctx: MetalContext
+    private var buffers: [String: (MTLBuffer, Int)] = [:]
+    public init(_ ctx: MetalContext = .shared) { self.ctx = ctx }
+
+    public func get(_ name: String, _ shape: [Int], _ dtype: DType = .f32) -> Tensor {
+        let bytes = shape.reduce(1, *) * dtype.size
+        if let (b, cap) = buffers[name], cap >= bytes { return Tensor(buffer: b, shape: shape, dtype: dtype) }
+        let b = ctx.makeBuffer(bytes: bytes)
+        buffers[name] = (b, bytes)
+        return Tensor(buffer: b, shape: shape, dtype: dtype)
+    }
+}

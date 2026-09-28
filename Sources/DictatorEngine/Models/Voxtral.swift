@@ -256,6 +256,7 @@ public final class VoxtralSession {
     var encPos = 0, decPos = 0
     let convMelCache: Tensor      // last 2 mel frames (conv1 left context)
     let conv1Cache: Tensor        // last conv1 output frame (conv2 left context)
+    let scratch: Scratch
     public private(set) var ids: [Int] = []       // all decoder input ids so far (prompt + emitted)
     public private(set) var emitted: [Int] = []   // tokens produced after the prompt
     public private(set) var stepTimes: [Double] = []
@@ -267,6 +268,7 @@ public final class VoxtralSession {
         ctx = model.ctx
         encKV = SlidingKV(layers: model.encLayers, window: model.encWindow, slack: 250, width: model.encHeads * model.encHD, ctx: ctx)
         decKV = SlidingKV(layers: model.decLayers, window: model.decWindow, slack: 512, width: model.decKV * model.decHD, ctx: ctx)
+        scratch = Scratch(ctx)
         convMelCache = Tensor(ctx, shape: [2, 128]); memset(convMelCache.contents, 0, convMelCache.byteCount)
         conv1Cache = Tensor(ctx, shape: [1, 1280]); memset(conv1Cache.contents, 0, conv1Cache.byteCount)
     }
@@ -274,34 +276,42 @@ public final class VoxtralSession {
     public var text: String { model.tokenizer.decode(emitted) }
 
     /// §4: mel [n*8, 128] -> audio embeddings [n, 3072] (conv stem with caches, encoder with KV cache, adapter).
+    /// Hands a copy of `t` (valid after the step runs) to `tap`.
+    func capture(_ name: String, _ t: Tensor, _ s: Step) {
+        guard let tap = tap else { return }
+        let c = Tensor(ctx, shape: t.shape, dtype: t.dtype)
+        s.copy(t, into: c)
+        tap(name, c)
+    }
+
     func encodeAudio(_ s: Step, mel: Tensor, out: Tensor) {
         let m = model
         let T = mel.shape[0], n = T / 8, E = T / 2
         // conv1: causal k=3 s=1 over [2 cached ; T] mel frames.
-        let melX = Tensor(ctx, shape: [T + 2, 128])
+        let melX = scratch.get("melX", [T + 2, 128])
         s.copy(convMelCache, into: melX.rows(0, 2))
         s.copy(mel, into: melX.rows(2, T))
         s.copy(melX.rows(T, 2), into: convMelCache)
-        let col1 = Tensor(ctx, shape: [T, 128 * 3])
+        let col1 = scratch.get("col1", [T, 128 * 3])
         s.im2col1d(melX, out: col1, K: 3, stride: 1, pad: 0)
-        let c1 = Tensor(ctx, shape: [T + 1, 1280])
+        let c1 = scratch.get("c1", [T + 1, 1280])
         s.copy(conv1Cache, into: c1.rows(0, 1))
         s.gemm(col1, m.conv1W, bias: m.conv1B, out: c1.rows(1, T), act: .geluErf)
         s.copy(c1.rows(T, 1), into: conv1Cache)
         // conv2: k=3 s=2, left pad 1 (the cached frame): out j reads c1 rows 2j, 2j+1, 2j+2 (= frames 2j-1..2j+1).
-        let col2 = Tensor(ctx, shape: [E, 1280 * 3])
+        let col2 = scratch.get("col2", [E, 1280 * 3])
         s.im2col1d(c1, out: col2, K: 3, stride: 2, pad: 0)
-        var x = Tensor(ctx, shape: [E, m.encDim])
+        var x = scratch.get("encA", [E, m.encDim])
         s.gemm(col2, m.conv2W, bias: m.conv2B, out: x, act: .geluErf)
-        tap?("conv_stem_out", x)
+        capture("conv_stem_out", x, s)
 
         let slot = encKV.reserve(s, E)
         let rr = encKV.ranges(pos0: encPos, n: E)
-        let ranges = Tensor(ctx, shape: [E, 2], dtype: .i32)
+        let ranges = scratch.get("encRanges", [E, 2], .i32)
         rr.withUnsafeBytes { ranges.contents.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
         let W = m.encHeads * m.encHD
-        let nrm = Tensor(ctx, shape: [E, m.encDim]), q = Tensor(ctx, shape: [E, W]), att = Tensor(ctx, shape: [E, W])
-        let g = Tensor(ctx, shape: [E, m.encFF]), u = Tensor(ctx, shape: [E, m.encFF])
+        let nrm = scratch.get("encNrm", [E, m.encDim]), q = scratch.get("encQ", [E, W]), att = scratch.get("encAtt", [E, W])
+        let g = scratch.get("encG", [E, m.encFF]), u = scratch.get("encU", [E, m.encFF])
         for (li, L) in m.enc.enumerated() {
             s.rmsNorm(x, gamma: L.n1, out: nrm)
             s.gemm(nrm, L.wq, bias: L.bq, out: q)
@@ -312,44 +322,44 @@ public final class VoxtralSession {
             s.rope(kr, heads: m.encHeads, headDim: m.encHD, invFreq: m.encInvFreq, pos0: encPos)
             s.attention(q: q, k: encKV.k[li].rows(0, slot + E), v: encKV.v[li].rows(0, slot + E), ranges: ranges, out: att,
                         heads: m.encHeads, kvHeads: m.encHeads, headDim: m.encHD)
-            let x2 = Tensor(ctx, shape: [E, m.encDim])
+            let x2 = scratch.get("encB", [E, m.encDim])
             s.gemm(att, L.wo, bias: L.bo, out: x2, residual: x)
             s.rmsNorm(x2, gamma: L.n2, out: nrm)
             s.gemm(nrm, L.wgate, out: g)
             s.gemm(nrm, L.wup, out: u)
             s.swiglu(gate: g, up: u, out: g)
-            let x3 = Tensor(ctx, shape: [E, m.encDim])
+            let x3 = scratch.get("encA", [E, m.encDim])
             s.gemm(g, L.wdown, bias: L.bdown, out: x3, residual: x2)
             x = x3
-            if li == 0 || li == 1 || li == 15 || li == 31 { tap?(String(format: "enc_layer_%02d_out", li), x) }
+            if li == 0 || li == 1 || li == 15 || li == 31 { capture(String(format: "enc_layer_%02d_out", li), x, s) }
         }
         encKV.count = slot + E
         encPos += E
-        let xn = Tensor(ctx, shape: [E, m.encDim])
+        let xn = scratch.get("encB", [E, m.encDim])
         s.rmsNorm(x, gamma: m.encNorm, out: xn)
         // §5 adapter: stack 4 consecutive frames (row-major reshape), 5120 -> 3072 GELU -> 3072.
-        let a1 = Tensor(ctx, shape: [n, 3072])
+        let a1 = scratch.get("adapt1", [n, 3072])
         s.gemm(xn.reshaped([n, 4 * m.encDim]), m.adapt1, out: a1, act: .geluErf)
         s.gemm(a1, m.adapt2, out: out)
-        tap?("adapter_out", out)
+        capture("adapter_out", out, s)
     }
 
     /// §6: decoder over M positions with input ids and audio embeddings; returns argmax of the last position.
     func decode(_ s: Step, ids newIds: [Int], audio: Tensor) -> (Tensor, Tensor) {
         let m = model
         let M = newIds.count
-        let idsT = Tensor(ctx, shape: [M], dtype: .i32)
+        let idsT = scratch.get("ids", [M], .i32)
         newIds.map { Int32($0) }.withUnsafeBytes { idsT.contents.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
-        var x = Tensor(ctx, shape: [M, m.decDim])
+        var x = scratch.get("decA", [M, m.decDim])
         s.embed(table: m.embed, ids: idsT, audio: audio, out: x)
-        tap?("dec_in", x)
+        capture("dec_in", x, s)
         let slot = decKV.reserve(s, M)
         let rr = decKV.ranges(pos0: decPos, n: M)
-        let ranges = Tensor(ctx, shape: [M, 2], dtype: .i32)
+        let ranges = scratch.get("decRanges", [M, 2], .i32)
         rr.withUnsafeBytes { ranges.contents.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
         let QW = m.decHeads * m.decHD
-        let nrm = Tensor(ctx, shape: [M, m.decDim]), q = Tensor(ctx, shape: [M, QW]), att = Tensor(ctx, shape: [M, QW])
-        let g = Tensor(ctx, shape: [M, m.decFF]), u = Tensor(ctx, shape: [M, m.decFF])
+        let nrm = scratch.get("decNrm", [M, m.decDim]), q = scratch.get("decQ", [M, QW]), att = scratch.get("decAtt", [M, QW])
+        let g = scratch.get("decG", [M, m.decFF]), u = scratch.get("decU", [M, m.decFF])
         for (li, L) in m.dec.enumerated() {
             s.rmsNorm(x, gamma: L.n1, out: nrm)
             s.gemm(nrm, L.wq, out: q)
@@ -360,24 +370,24 @@ public final class VoxtralSession {
             s.rope(kr, heads: m.decKV, headDim: m.decHD, invFreq: m.decInvFreq, pos0: decPos)
             s.attention(q: q, k: decKV.k[li].rows(0, slot + M), v: decKV.v[li].rows(0, slot + M), ranges: ranges, out: att,
                         heads: m.decHeads, kvHeads: m.decKV, headDim: m.decHD)
-            let x2 = Tensor(ctx, shape: [M, m.decDim])
+            let x2 = scratch.get("decB", [M, m.decDim])
             s.gemm(att, L.wo, out: x2, residual: x)
             s.rmsNorm(x2, gamma: L.n2ada, out: nrm)
             s.gemm(nrm, L.wgate, out: g)
             s.gemm(nrm, L.wup, out: u)
             s.swiglu(gate: g, up: u, out: g)
-            let x3 = Tensor(ctx, shape: [M, m.decDim])
+            let x3 = scratch.get("decA", [M, m.decDim])
             s.gemm(g, L.wdown, out: x3, residual: x2)
             x = x3
-            if li == 0 || li == 1 || li == 12 || li == 25 { tap?(String(format: "dec_layer_%02d_out", li), x) }
+            if li == 0 || li == 1 || li == 12 || li == 25 { capture(String(format: "dec_layer_%02d_out", li), x, s) }
         }
         decKV.count = slot + M
         decPos += M
-        let last = Tensor(ctx, shape: [1, m.decDim])
+        let last = scratch.get("decLast", [1, m.decDim])
         s.rmsNorm(x.rows(M - 1, 1), gamma: m.decNorm, out: last)
-        let logits = Tensor(ctx, shape: [1, m.vocab])
+        let logits = scratch.get("logits", [1, m.vocab])
         s.gemm(last, m.head, out: logits)
-        let idx = Tensor(ctx, shape: [1], dtype: .i32), val = Tensor(ctx, shape: [1])
+        let idx = scratch.get("argIdx", [1], .i32), val = scratch.get("argVal", [1])
         s.argmax(logits, idx: idx, val: val)
         return (idx, logits)
     }
@@ -466,8 +476,9 @@ public final class VoxtralSession {
         precondition(mel.count == 8 * 128)
         let t0 = DispatchTime.now().uptimeNanoseconds
         var s = Step(ctx)
-        let melT = Tensor.from(mel, shape: [8, 128], dtype: .f32, ctx)
-        let audio = Tensor(ctx, shape: [1, model.decDim])
+        let melT = scratch.get("melIn", [8, 128])
+        melT.copy(from: mel)
+        let audio = scratch.get("audioEmb", [1, model.decDim])
         encodeAudio(s, mel: melT, out: audio)
         var encT = 0.0
         if splitTiming { encT = s.run(); s = Step(ctx) }
