@@ -33,22 +33,34 @@ do {
     case "transcribe":
         guard args.count > 1 else { throw EngineError.io("transcribe: missing audio path") }
         let audio = try AudioFile.readMono16k(URL(fileURLWithPath: args[1]))
-        let latency = Int(option("--latency", "160")!)!
-        let modelDir = URL(fileURLWithPath: option("--model-dir", "models/nemotron-speech-streaming-en-0.6b")!)
+        guard let kind = NemoModelKind(rawValue: option("--model", "nemotron")!) else { throw EngineError.io("unknown --model") }
+        let modelDir = URL(fileURLWithPath: option("--model-dir", "models/\(kind.dirName)")!)
         let t0 = Date()
-        let model = try NemotronModel(modelDir: modelDir, precision: option("--precision", "f32")!)
+        let model = try NemotronModel(modelDir: modelDir, kind: kind, precision: option("--precision", "f32")!)
         let load = Date().timeIntervalSince(t0)
-        let stream = NemotronStream(model: model, lookahead: latency / 80 - 1)
-        let mel = model.frontend.features(audio)
         let t1 = Date()
-        // NeMo's streaming buffer treats every mel frame (including the zeroed last one) as valid.
-        stream.runBuffered(mel: mel, frames: audio.count / 160 + 1, validFrames: audio.count / 160 + 1)
+        let text: String
+        var wallTimes: [Double]
+        var chunkMs: Int
+        switch kind {
+        case .nemotron:
+            let latency = Int(option("--latency", "160")!)!
+            let stream = NemotronStream(model: model, lookahead: latency / 80 - 1)
+            let mel = model.frontend.features(audio)
+            // NeMo's streaming buffer treats every mel frame (including the zeroed last one) as valid.
+            stream.runBuffered(mel: mel, frames: audio.count / 160 + 1, validFrames: audio.count / 160 + 1)
+            text = stream.text; wallTimes = stream.wallTimes; chunkMs = stream.schedule.chunkMs
+        case .parakeet:
+            let stream = ParakeetStream(model: model)
+            stream.runBuffered(audio: audio)
+            text = stream.text; wallTimes = stream.wallTimes; chunkMs = 160
+        }
         let wall = Date().timeIntervalSince(t1)
-        print(stream.text)
-        let g = stream.gpuTimes.sorted(), w = stream.wallTimes.sorted()
-        FileHandle.standardError.write(String(format: "load %.2fs | %d chunks of %d ms | audio %.2fs, wall %.3fs (RTF %.4f) | per-chunk GPU p50 %.2f ms p99 %.2f ms | wall p50 %.2f ms p99 %.2f ms\n",
-            load, g.count, stream.schedule.chunkMs, Double(audio.count) / 16000, wall, wall / (Double(audio.count) / 16000),
-            g[g.count / 2] * 1000, g[min(g.count - 1, g.count * 99 / 100)] * 1000, w[w.count / 2] * 1000, w[min(w.count - 1, w.count * 99 / 100)] * 1000).data(using: .utf8)!)
+        print(text)
+        let w = wallTimes.sorted()
+        FileHandle.standardError.write(String(format: "load %.2fs | %d steps of %d ms | audio %.2fs, wall %.3fs (RTF %.4f) | per-step wall p50 %.2f ms p99 %.2f ms\n",
+            load, w.count, chunkMs, Double(audio.count) / 16000, wall, wall / (Double(audio.count) / 16000),
+            w[w.count / 2] * 1000, w[min(w.count - 1, w.count * 99 / 100)] * 1000).data(using: .utf8)!)
     case "convert":
         let model = args.count > 1 ? args[1] : "nemotron"
         let precision = WeightConverter.Precision(rawValue: option("--precision", "f16")!)!
@@ -59,7 +71,7 @@ do {
         print("wrote \(dst.path): \(r.tensors) tensors, \(r.bytes / (1 << 20)) MB")
     case "probe":
         let w = try? SafeTensorsFile(URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b/nemo_extracted/weights.safetensors"))
-        Probe.gemmSmallM(weights: w)
+        if args.contains("gemm") { Probe.gemmShapes() } else { Probe.gemmSmallM(weights: w) }
     case "ladder":
         guard let kind = NemoModelKind(rawValue: args.count > 1 ? args[1] : "nemotron") else { throw EngineError.io("ladder: unknown model") }
         let ctxParts = option("--context", kind == .nemotron ? "70,1" : "70,2,5")!.split(separator: ",").map { Int($0)! }

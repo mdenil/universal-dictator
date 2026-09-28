@@ -30,3 +30,28 @@ public enum Probe {
         time("layernorm 2x1024 x 120") { s in for _ in 0..<120 { s.layerNorm(x, gamma: g, beta: g, out: x) } }
     }
 }
+
+extension Probe {
+    /// GEMM throughput at the shapes the models use (GPU time, best of 5, back-to-back x8).
+    public static func gemmShapes() {
+        let ctx = MetalContext.shared
+        let shapes: [(String, Int, Int, Int)] = [
+            ("4096^3", 4096, 4096, 4096),
+            ("parakeet ff1 77x4096x1024", 77, 4096, 1024),
+            ("parakeet ff2 77x1024x4096", 77, 1024, 4096),
+            ("parakeet att 77x1024x1024", 77, 1024, 1024),
+            ("offline 616x4096x1024", 616, 4096, 1024),
+            ("subsample pw 2112x256x256", 2112, 256, 256),
+        ]
+        for (dt, wdt) in [(DType.f32, DType.f32), (DType.f32, DType.f16), (DType.f16, DType.f16)] {
+            for (name, M, N, K) in shapes {
+                let a = Tensor(ctx, shape: [M, K], dtype: dt), w = Tensor(ctx, shape: [N, K], dtype: wdt)
+                let c = Tensor(ctx, shape: [M, N], dtype: dt)
+                var best = Double.infinity
+                for _ in 0..<5 { let s = Step(ctx); for _ in 0..<8 { s.gemm(a, w, out: c) }; best = min(best, s.run() / 8) }
+                let tf = 2.0 * Double(M * N * K) / best / 1e12
+                print(String(format: "%@x%@  %-28@ %8.3f ms  %6.2f TFLOPS", dt.rawValue as NSString, wdt.rawValue as NSString, name as NSString, best * 1000, tf))
+            }
+        }
+    }
+}

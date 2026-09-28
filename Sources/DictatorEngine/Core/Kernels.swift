@@ -64,6 +64,8 @@ public final class Step {
 
 /// Kill-switch for the skinny GEMV path (DICTATOR_GEMV=0 disables it).
 let gemvEnabled = ProcessInfo.processInfo.environment["DICTATOR_GEMV"] != "0"
+/// Kill-switch for GEMM v2 (DICTATOR_GEMM_V1=1 uses the original tiled kernel).
+let gemmV1 = ProcessInfo.processInfo.environment["DICTATOR_GEMM_V1"] == "1"
 
 private func dtypeTag(_ d: DType) -> String {
     switch d {
@@ -88,7 +90,10 @@ extension Step {
         let types = "\(dtypeTag(a.dtype))_\(dtypeTag(w.dtype))_\(dtypeTag(out.dtype))"
         // Skinny inputs are weight-bandwidth bound: use the GEMV kernel (reads each weight row once).
         let skinny = M <= 8 && K % 4 == 0 && gemvEnabled
-        let p = try! ctx.pipeline(skinny ? "gemv_nt_" + types : "gemm_nt_" + types)
+        // GEMM v2 uses 32x64 tiles (a 64x64 v2 tile measured slower; see PERF_LOG R1).
+        // DICTATOR_GEMM_V1=1 restores the v1 kernel.
+        let name = skinny ? "gemv_nt_" + types : (gemmV1 ? "gemm_nt_" + types : "gemm2_32x64_" + types)
+        let p = try! ctx.pipeline(name)
         var params = GemmParams(M: Int32(M), N: Int32(N), K: Int32(K), lda: Int32(K), ldb: Int32(K), ldc: Int32(N),
                                 hasBias: bias == nil ? 0 : 1, act: act.rawValue,
                                 hasResidual: residual == nil ? 0 : 1, ldr: Int32(N),
@@ -101,7 +106,8 @@ extension Step {
             dispatch(p, threadgroups: MTLSize(width: (N + 15) / 16, height: 1, depth: 1),
                      threads: MTLSize(width: 128, height: 1, depth: 1))
         } else {
-            dispatch(p, threadgroups: MTLSize(width: (N + 63) / 64, height: (M + 63) / 64, depth: 1),
+            let bm = gemmV1 ? 64 : 32
+            dispatch(p, threadgroups: MTLSize(width: (N + 63) / 64, height: (M + bm - 1) / bm, depth: 1),
                      threads: MTLSize(width: 128, height: 1, depth: 1))
         }
     }
