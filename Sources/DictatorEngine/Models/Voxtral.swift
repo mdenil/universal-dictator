@@ -435,3 +435,66 @@ public final class VoxtralSession {
         return left + audio + right
     }
 }
+
+/// Live Voxtral: prepends the 2.56 s silence pad, computes mel frames as soon as their window is
+/// complete, prefills once the 39 prompt positions have audio, then runs one decoder step per 8 new
+/// mel frames. `finish()` appends the reference's right padding and runs until EOS or no more frames.
+public final class VoxtralLive: StreamingTranscriber {
+    public let session: VoxtralSession
+    var padded: [Float]
+    var mel: [Float] = []
+    var melFrames = 0
+    var position = 0                 // next decoder position to run
+    var realSamples = 0
+    var stopped = false
+    public private(set) var emissions: [Emission] = []
+    public private(set) var stepWallTimes: [Double] = []
+
+    public init(model: VoxtralModel) {
+        session = VoxtralSession(model: model)
+        padded = [Float](repeating: 0, count: 32 * 1280)
+    }
+
+    public var transcript: String { session.text }
+    public func text(of tokens: [Int]) -> String { session.model.tokenizer.decode(tokens) }
+
+    public func push(_ samples: [Float]) {
+        realSamples += samples.count
+        padded += samples
+        run()
+    }
+
+    public func finish() {
+        let align = (1280 - realSamples % 1280) % 1280
+        padded += [Float](repeating: 0, count: align + (session.model.nDelay + 1 + 10) * 1280)
+        run()
+        stopped = true
+    }
+
+    func run() {
+        // Frame t needs padded samples [160t - 200, 160t + 200).
+        let ready = padded.count >= 200 ? (padded.count - 200) / 160 + 1 : 0
+        if ready > melFrames {
+            mel += session.model.frontend.frames(padded, from: melFrames, count: ready - melFrames)
+            melFrames = ready
+        }
+        let promptLen = session.model.prompt.count
+        while !stopped {
+            let t0 = DispatchTime.now().uptimeNanoseconds
+            let tok: Int
+            if position == 0 {
+                guard melFrames >= 8 * promptLen else { return }
+                tok = session.prefill(mel: Array(mel[0..<(8 * promptLen * 128)]))
+                position = promptLen
+            } else {
+                guard melFrames >= 8 * (position + 1) else { return }
+                tok = session.step(mel: Array(mel[(8 * position * 128)..<(8 * (position + 1) * 128)]))
+                position += 1
+            }
+            let dt = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9
+            stepWallTimes.append(dt)
+            emissions.append(Emission(token: tok, samplesSeen: realSamples, computeSeconds: dt))
+            if tok == session.model.eos { stopped = true }
+        }
+    }
+}

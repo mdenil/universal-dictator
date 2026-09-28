@@ -14,7 +14,9 @@ Nemotron (cache-aware): calls `perform_streaming` imported from NeMo v2.7.3
 
 Parakeet (buffered): runs the official buffered script (c42e444 version, via run_official.py) with
   left_context_secs=5.6 chunk_secs=0.16 right_context_secs=0.40 att_context_size_as_chunk=true,
-  batch_size=1, compute_dtype=float32 on CPU, then splits its output manifest into per-utterance transcripts.
+  batch_size=1, compute_dtype=float32, then splits its output manifest into per-utterance transcripts.
+  The dev20 golden was produced with --device mps: the buffered pipeline re-encodes a 6.16 s window every
+  160 ms and ran at about 1/20 of real time on this machine's CPU (versus about 1/2 on MPS).
 
 Layout: data/golden/<model>/stream_<cfg>/<utt_id>/...  and data/golden/<model>/stream_<cfg>/transcripts.jsonl
 

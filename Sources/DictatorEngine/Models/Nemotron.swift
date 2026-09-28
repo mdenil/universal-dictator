@@ -78,6 +78,14 @@ public final class NemotronStream {
     public private(set) var gpuTimes: [Double] = []
     /// Wall seconds per step including CPU decoding.
     public private(set) var wallTimes: [Double] = []
+    // Live-input state (see `push`).
+    lazy var liveMel = NemoMelStream(model.frontend)
+    var liveBuffer: [Float] = []
+    var liveBufferStart = 0
+    var liveNextFrame = 0
+    var liveSamples = 0
+    var liveEmissions: [Emission] = []
+
     /// Receives the kept encoder output rows of each chunk (parity testing).
     public var encTap: (([Float]) -> Void)?
 
@@ -151,4 +159,68 @@ public final class NemotronStream {
             }
         }
     }
+}
+
+extension NemotronStream {
+    /// Live input: push audio samples as they arrive. Runs every chunk whose mel frames are complete
+    /// and returns the tokens emitted. Equivalent to `runBuffered` over the whole utterance.
+    public func push(samples: [Float]) -> [Int] {
+        liveSamples += samples.count
+        let mel = liveMel.push(samples)
+        liveBuffer += mel
+        return drainChunks(final: false)
+    }
+
+    /// Ends the stream (flushes the final partial chunk); returns the tokens it emitted.
+    public func flush() -> [Int] {
+        liveBuffer += liveMel.finish()
+        return drainChunks(final: true)
+    }
+
+    func drainChunks(final: Bool) -> [Int] {
+        let bins = model.encoder.config.melBins
+        let have = liveBuffer.count / bins + liveBufferStart
+        var out = [Int]()
+        while true {
+            let idx = liveNextFrame
+            let first = idx == 0
+            let size = first ? schedule.firstChunk : schedule.chunk
+            let end = idx + size
+            if end > have && !final { break }
+            let chunkEnd = min(end, have)
+            let chunkLen = chunkEnd - idx
+            if chunkLen <= 0 || chunkLen < (first ? 1 : 8) { break }
+            let cacheStart = first ? idx : max(0, idx - schedule.preEncodeCache)
+            let rows = chunkEnd - cacheStart
+            let isLast = final && end >= have
+            let a = (cacheStart - liveBufferStart) * bins
+            let t0 = DispatchTime.now().uptimeNanoseconds
+            var toks = [Int]()
+            liveBuffer.withUnsafeBufferPointer { m in
+                let slice = UnsafeBufferPointer(rebasing: m[a..<(a + rows * bins)])
+                toks = step(melRows: slice, nRows: rows, validRows: rows, keepAll: isLast)
+            }
+            let dt = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9
+            liveEmissions += toks.map { Emission(token: $0, samplesSeen: liveSamples, computeSeconds: dt) }
+            out += toks
+            liveNextFrame = end
+            // Keep only the pre-encode cache window.
+            let keepFrom = liveNextFrame - schedule.preEncodeCache
+            if keepFrom > liveBufferStart {
+                liveBuffer.removeFirst(min(liveBuffer.count, (keepFrom - liveBufferStart) * bins))
+                liveBufferStart = keepFrom
+            }
+            if isLast { break }
+        }
+        return out
+    }
+}
+
+extension NemotronStream: StreamingTranscriber {
+    public func push(_ samples: [Float]) { _ = push(samples: samples) }
+    public func finish() { _ = flush() }
+    public var transcript: String { text }
+    public var emissions: [Emission] { liveEmissions }
+    public var stepWallTimes: [Double] { wallTimes }
+    public func text(of tokens: [Int]) -> String { model.tokenizer.decode(tokens) }
 }

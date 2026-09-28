@@ -106,3 +106,56 @@ public final class NemoMelFrontend {
         return mel
     }
 }
+
+/// Incremental version of `NemoMelFrontend.features`: push audio in any sizes; frames are produced as
+/// soon as their window is complete, and `finish()` emits the tail exactly like the full-utterance
+/// computation (zero padding on the right, last frame zeroed). Output is identical to `features`.
+public final class NemoMelStream {
+    public let fe: NemoMelFrontend
+    var audio: [Float] = []          // raw samples received so far
+    public private(set) var frames = 0   // mel frames emitted
+    public private(set) var finished = false
+
+    public init(_ fe: NemoMelFrontend) { self.fe = fe }
+
+    /// Frame t uses preemphasized samples [160t - 200, 160t + 200) (window of 400 centered in the
+    /// zero-padded 512-sample frame), so it is ready once sample 160t + 200 - 1 has arrived.
+    func readyFrames() -> Int {
+        let n = audio.count
+        return n >= 200 ? (n - 200) / fe.hop + 1 : 0
+    }
+
+    /// Appends samples; returns newly completed mel frames [k, nMels].
+    public func push(_ samples: [Float]) -> [Float] {
+        audio += samples
+        return emit(upTo: readyFrames(), valid: Int.max)
+    }
+
+    /// Ends the stream: emits the remaining frames (T = n/160 + 1 in total, the last one zero).
+    public func finish() -> [Float] {
+        finished = true
+        let n = audio.count
+        return emit(upTo: n / fe.hop + 1, valid: n / fe.hop)
+    }
+
+    func emit(upTo end: Int, valid: Int) -> [Float] {
+        guard end > frames else { return [] }
+        let W = fe.winLength, off = (fe.nFFT - W) / 2, pad = fe.nFFT / 2
+        let k = end - frames
+        var fr = [Float](repeating: 0, count: k * W)
+        let n = audio.count
+        for t in 0..<k {
+            let start = (frames + t) * fe.hop - pad + off
+            for i in 0..<W {
+                let idx = start + i
+                guard idx >= 0 && idx < n else { continue }
+                fr[t * W + i] = idx == 0 ? audio[0] : audio[idx] - fe.preemph * audio[idx - 1]
+            }
+        }
+        // Rows at or beyond `valid` are zeroed (only the very last frame, at finish).
+        let validRows = max(0, min(k, valid - frames))
+        let out = fe.featuresFromFrames(fr, T: k, valid: validRows)
+        frames = end
+        return out
+    }
+}

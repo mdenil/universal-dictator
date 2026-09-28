@@ -61,6 +61,7 @@ def main():
     ap.add_argument("--device", default="cpu", choices=["cpu", "mps"])
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--limit", type=int, default=0, help="fixed random subset of this many utterances (seed 0)")
+    ap.add_argument("--rescore", action="store_true", help="skip the run; score the existing official output")
     args = ap.parse_args()
 
     src = Path(args.set) if args.set.endswith(".jsonl") else DATA / "librispeech" / f"{args.set}.jsonl"
@@ -87,8 +88,9 @@ def main():
             f"att_context_size={acs}", f"batch_size={args.batch_size}", "cuda=-1", f"allow_mps={mps}",
             "compute_dtype=float32", f"output_path={out_dir}",
         ]
-        # ca_infer.py:474: "streaming_out_" + <model file stem> + "_" + <manifest stem> + ".json"
-        pred_file = out_dir / f"streaming_out_{MODEL_PATHS['nemotron'].stem}_{man.stem}.json"
+        # ca_infer.py:474 names it "streaming_out_" + splitext(model_name)[0] + "_" + <manifest stem> + ".json";
+        # model_name is already the .nemo stem, so splitext cuts it at ".6b" -> "...-en-0". Glob instead.
+        pred_file = None
     else:
         assert args.config == "70_2_5"
         pred_file = out_dir / "official_output.jsonl"
@@ -100,8 +102,14 @@ def main():
         ]
     print(" ".join(cmd), flush=True)
     t0 = time.time()
-    subprocess.run(cmd, check=True)
+    if not args.rescore:
+        subprocess.run(cmd, check=True)
     elapsed = time.time() - t0
+    if args.rescore:
+        prev = json.loads((out_dir / "result.json").read_text()) if (out_dir / "result.json").exists() else {}
+        elapsed = prev.get("elapsed_s", float("nan"))
+    if pred_file is None:
+        (pred_file,) = list(out_dir.glob("streaming_out_*.json"))
 
     preds = read_manifest(pred_file)
     if args.model == "nemotron":

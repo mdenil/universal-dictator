@@ -201,3 +201,85 @@ public final class ParakeetCachedStream {
         wallTimes.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
     }
 }
+
+/// Live driver for Parakeet's buffered schedule (exact or cached). A step runs once audio beyond its
+/// right edge has arrived (so it is known not to be the last); `finish()` runs the remaining steps with
+/// the reference's last-chunk handling. Token output equals `runBuffered` on the whole utterance.
+public final class ParakeetLive: StreamingTranscriber {
+    public typealias StepFn = (_ buffer: [Float], _ bufStart: Int, _ leftLen: Int, _ isLast: Bool) -> [Int]
+    let stepFn: StepFn
+    let decode: ([Int]) -> String
+    let leftSamples = 89600, chunkSamples = 2560, rightSamples = 6400
+    var audio: [Float] = []
+    var audioStart = 0            // absolute index of audio[0] (older samples are dropped)
+    var leftSample = 0, rightSample = 2560 + 6400
+    var bufStart = 0, bufEnd = 0, leftLen = 0, chunkLen = 0, rightLen = 0
+    var done = false
+    public private(set) var tokens: [Int] = []
+    public private(set) var emissions: [Emission] = []
+    public private(set) var stepWallTimes: [Double] = []
+
+    public init(step: @escaping StepFn, decode: @escaping ([Int]) -> String) {
+        stepFn = step
+        self.decode = decode
+    }
+
+    public var transcript: String { decode(tokens) }
+    public func text(of tokens: [Int]) -> String { decode(tokens) }
+    var received: Int { audioStart + audio.count }
+
+    public func push(_ samples: [Float]) {
+        audio += samples
+        while !done && received > rightSample { runStep(isLast: false, n: rightSample) }
+    }
+
+    public func finish() {
+        let n = received
+        rightSample = min(rightSample, n)
+        while !done && leftSample < n { runStep(isLast: rightSample >= n, n: n) }
+        done = true
+    }
+
+    func runStep(isLast: Bool, n: Int) {
+        let added = rightSample - leftSample
+        bufEnd += added
+        leftLen += chunkLen
+        let right = rightLen + added
+        if isLast { chunkLen = right; rightLen = 0 } else { chunkLen = min(chunkSamples, right); rightLen = right - chunkLen }
+        if leftLen > leftSamples { bufStart += leftLen - leftSamples; leftLen = leftSamples }
+        let buffer = Array(audio[(bufStart - audioStart)..<(bufEnd - audioStart)])
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        let toks = stepFn(buffer, bufStart, leftLen, isLast)
+        let dt = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9
+        stepWallTimes.append(dt)
+        tokens += toks
+        emissions += toks.map { Emission(token: $0, samplesSeen: received, computeSeconds: dt) }
+        leftSample = rightSample
+        rightSample = min(rightSample + chunkSamples, isLast ? n : Int.max)
+        if isLast { done = true }
+        // Drop audio that can no longer be part of a buffer.
+        if bufStart - audioStart > 16000 { audio.removeFirst(bufStart - audioStart); audioStart = bufStart }
+    }
+}
+
+extension ParakeetStream {
+    /// A live transcriber running the exact (Stage A) algorithm.
+    public func live() -> ParakeetLive {
+        ParakeetLive(step: { buf, _, left, last in
+            let before = self.tokens.count
+            self.step(audio: buf, leftLen: left, isLast: last)
+            return Array(self.tokens[before...])
+        }, decode: { self.model.tokenizer.decode($0) })
+    }
+}
+
+extension ParakeetCachedStream {
+    /// A live transcriber running frozen-prefix caching (Stage B).
+    public func live() -> ParakeetLive {
+        ParakeetLive(step: { buf, start, left, last in
+            let before = self.tokens.count
+            self.step(buffer: buf, bufStart: start, leftLen: left, isLast: last)
+            return Array(self.tokens[before...])
+        }, decode: { self.model.tokenizer.decode($0) })
+    }
+}

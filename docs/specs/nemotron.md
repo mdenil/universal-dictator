@@ -22,7 +22,7 @@ Reference runtime: the NeMo 2.7.3 wheel in `reference/nemo/.venv`, run on CPU in
 | `sp_tok.py` | `nemo/collections/common/tokenizers/sentencepiece_tokenizer.py` |
 | `ca_infer.py` | `third_party/nemo-v2.7.3-examples/examples/asr/asr_cache_aware_streaming/speech_to_text_cache_aware_streaming_infer.py` (from the `v2.7.3` git tag; the wheel does not ship examples) |
 
-Every statement below was checked against the source. The ones marked **[verified]** were also reproduced numerically by `reference/nemo/check_spec.py`, which re-implements the model from this spec with plain torch ops on the raw `state_dict` and compares each stage with the golden tensors (see "Executable check" at the end).
+Every statement below was checked against the source. The ones marked **[verified]** were also reproduced numerically by `reference/nemo/check_spec.py`, which re-implements the model from this spec with plain torch ops on the raw `state_dict` and compares each stage with the golden tensors (see §10).
 
 Notation: `T_mel` = mel frames, `T` = encoder frames (after 8× subsampling), `D` = 1024, `H` = 8 heads, `d_k` = 128. Row-major, time-major unless noted.
 
