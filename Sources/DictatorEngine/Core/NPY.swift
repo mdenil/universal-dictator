@@ -53,7 +53,7 @@ public struct NPYArray {
         guard let header = String(data: d[headerStart..<(headerStart + headerLen)], encoding: .ascii) else {
             throw EngineError.io("bad npy header")
         }
-        guard !header.contains("'fortran_order': True") else { throw EngineError.io("fortran order npy unsupported") }
+        let fortran = header.contains("'fortran_order': True")
         func field(_ key: String) -> String? {
             guard let r = header.range(of: "'\(key)':") else { return nil }
             return String(header[r.upperBound...]).trimmingCharacters(in: .whitespaces)
@@ -67,8 +67,32 @@ public struct NPYArray {
         }
         let dims = shapePart[shapePart.index(after: open)..<close]
             .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.compactMap { Int($0) }
-        let payload = d.subdata(in: (headerStart + headerLen)..<d.count)
+        var payload = d.subdata(in: (headerStart + headerLen)..<d.count)
+        if fortran && dims.count > 1 {
+            payload = fortranToC(payload, shape: dims, elemSize: Int(descr.dropFirst(2)) ?? 4)
+        }
         return NPYArray(shape: dims, dtype: descr, data: payload)
+    }
+
+    /// Reorders column-major (Fortran) element data into row-major (C) order.
+    static func fortranToC(_ data: Data, shape: [Int], elemSize: Int) -> Data {
+        let n = shape.reduce(1, *)
+        var out = Data(count: n * elemSize)
+        var fStrides = [Int](repeating: 1, count: shape.count)
+        for i in 1..<shape.count { fStrides[i] = fStrides[i - 1] * shape[i - 1] }
+        data.withUnsafeBytes { src in
+            out.withUnsafeMutableBytes { dst in
+                var idx = [Int](repeating: 0, count: shape.count)
+                for c in 0..<n {
+                    var f = 0
+                    for k in 0..<shape.count { f += idx[k] * fStrides[k] }
+                    memcpy(dst.baseAddress! + c * elemSize, src.baseAddress! + f * elemSize, elemSize)
+                    var k = shape.count - 1
+                    while k >= 0 { idx[k] += 1; if idx[k] < shape[k] { break }; idx[k] = 0; k -= 1 }
+                }
+            }
+        }
+        return out
     }
 
     public static func save(_ floats: [Float], shape: [Int], to url: URL) throws {

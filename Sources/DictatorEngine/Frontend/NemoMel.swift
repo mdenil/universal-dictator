@@ -1,0 +1,92 @@
+import Accelerate
+import Foundation
+
+/// NeMo `FilterbankFeatures` log-mel frontend, reproduced for inference (dither off):
+///   preemphasis (0.97, first sample kept) -> centered STFT (n_fft 512, hop 160, 400-sample window
+///   zero-padded to 512, constant zero padding of n_fft/2 on both sides) -> power spectrum ->
+///   mel filterbank (taken from the checkpoint) -> log(x + 2^-24).
+/// The optional per-feature normalization is applied by the caller when a model needs it.
+///
+/// The DFT is a pair of matrix products with precomputed cos/sin tables, run through Accelerate.
+public final class NemoMelFrontend {
+    public let nFFT = 512
+    public let hop = 160
+    public let winLength = 400
+    public let nMels: Int
+    public let preemph: Float = 0.97
+    public let logGuard: Float = Float(pow(2.0, -24.0))
+    let nBins = 257
+    let fb: [Float]          // [nMels, nBins]
+    let cosT: [Float]        // [nBins, winLength] (window folded in)
+    let sinT: [Float]
+
+    public init(filterbank: [Float], window: [Float]) {
+        precondition(window.count == winLength)
+        nMels = filterbank.count / nBins
+        fb = filterbank
+        // torch.stft pads the win_length window with zeros to n_fft, centered: offset (512-400)/2.
+        let off = (nFFT - winLength) / 2
+        var c = [Float](repeating: 0, count: nBins * winLength)
+        var s = [Float](repeating: 0, count: nBins * winLength)
+        for k in 0..<nBins {
+            for n in 0..<winLength {
+                let phase = 2 * Double.pi * Double(k) * Double(n + off) / Double(nFFT)
+                c[k * winLength + n] = Float(cos(phase)) * window[n]
+                s[k * winLength + n] = Float(-sin(phase)) * window[n]
+            }
+        }
+        cosT = c
+        sinT = s
+    }
+
+    /// Number of valid frames NeMo reports for `samples` input samples (the extra final frame is zeroed).
+    public func validFrames(samples: Int) -> Int { samples / hop }
+
+    /// Full-utterance features, time-major [T, nMels] with T = samples / hop + 1 (last frame zero).
+    public func features(_ audio: [Float]) -> [Float] {
+        let n = audio.count
+        var x = [Float](repeating: 0, count: n)
+        if n > 0 {
+            x[0] = audio[0]
+            for i in 1..<n { x[i] = audio[i] - preemph * audio[i - 1] }
+        }
+        let T = n / hop + 1
+        let valid = validFrames(samples: n)
+        // Frame t covers padded samples [t*hop, t*hop + nFFT); the window occupies [off, off+400).
+        let pad = nFFT / 2
+        let off = (nFFT - winLength) / 2
+        var frames = [Float](repeating: 0, count: T * winLength)
+        for t in 0..<T {
+            let start = t * hop - pad + off
+            for i in 0..<winLength {
+                let idx = start + i
+                if idx >= 0 && idx < n { frames[t * winLength + i] = x[idx] }
+            }
+        }
+        return featuresFromFrames(frames, T: T, valid: valid)
+    }
+
+    /// frames [T, winLength] of preemphasized samples -> log-mel [T, nMels]; frames >= valid are zero.
+    func featuresFromFrames(_ frames: [Float], T: Int, valid: Int) -> [Float] {
+        var re = [Float](repeating: 0, count: T * nBins)
+        var im = [Float](repeating: 0, count: T * nBins)
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, Int32(T), Int32(nBins), Int32(winLength), 1,
+                    frames, Int32(winLength), cosT, Int32(winLength), 0, &re, Int32(nBins))
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, Int32(T), Int32(nBins), Int32(winLength), 1,
+                    frames, Int32(winLength), sinT, Int32(winLength), 0, &im, Int32(nBins))
+        var power = [Float](repeating: 0, count: T * nBins)
+        for i in 0..<(T * nBins) {
+            let mag = (re[i] * re[i] + im[i] * im[i]).squareRoot()
+            power[i] = mag * mag
+        }
+        var mel = [Float](repeating: 0, count: T * nMels)
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, Int32(T), Int32(nMels), Int32(nBins), 1,
+                    power, Int32(nBins), fb, Int32(nBins), 0, &mel, Int32(nMels))
+        for t in 0..<T {
+            for m in 0..<nMels {
+                mel[t * nMels + m] = t < valid ? log(mel[t * nMels + m] + logGuard) : 0
+            }
+        }
+        return mel
+    }
+}
