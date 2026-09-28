@@ -98,7 +98,7 @@ def run_one(model, processor, dtype, utt, out_root: Path, dec_layers, n_dec_pos,
     tok_emb = model.model.language_model.embed_tokens.weight
     n_chk = min(n_dec_pos, dec_in.shape[0], len(seq))
     ids = torch.tensor(seq[:n_chk], device=tok_emb.device)
-    emb = tok_emb[ids].to("cpu", torch.float32).numpy()
+    emb = tok_emb[ids].detach().to("cpu", torch.float32).numpy()
     if dtype == torch.bfloat16:
         recon = (torch.from_numpy(emb).bfloat16() + torch.from_numpy(adapter[:n_chk]).bfloat16()).float().numpy()
     else:
@@ -151,7 +151,7 @@ def main():
     out_root = Path(args.out)
     out_root.mkdir(parents=True, exist_ok=True)
     model, processor, dtype, info = vc.load_model(args.device, args.precision)
-    print("loaded", info, flush=True)
+    print("loaded", info, "rss_gb", round(vc.rss_gb(), 2), flush=True)
     dec_layers = [int(x) for x in args.dec_layers.split(",")]
     enc_layers = list(range(32)) if args.enc_layers == "all" else [int(x) for x in args.enc_layers.split(",")]
     utts = vc.read_utts(args.utts)[: args.limit]

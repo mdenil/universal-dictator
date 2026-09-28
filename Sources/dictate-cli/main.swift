@@ -7,7 +7,10 @@ usage: dictate-cli <command> [options]
 commands:
   peaks        measure this machine's GPU bandwidth / FLOPS / dispatch overhead
   transcribe   transcribe a WAV/FLAC file with streaming inference:
-               transcribe <audio> [--model nemotron] [--latency 160|560]
+               transcribe <audio> [--model nemotron|parakeet] [--latency 160|560] [--precision f32|f16]
+               parakeet: default exact buffered (Stage A); --horizon H uses frozen-prefix caching
+  eval         transcribe a manifest to jsonl (score with eval/score.py):
+               eval --model nemotron|parakeet --manifest <jsonl> --out <jsonl> [--latency] [--precision] [--limit N]
   convert      write converted weights: convert nemotron|parakeet --precision f16
   ladder       compare against golden tensors:
                ladder nemotron --golden <utt-dir> [--context 70,1] [--model-dir models/...]
@@ -51,9 +54,15 @@ do {
             stream.runBuffered(mel: mel, frames: audio.count / 160 + 1, validFrames: audio.count / 160 + 1)
             text = stream.text; wallTimes = stream.wallTimes; chunkMs = stream.schedule.chunkMs
         case .parakeet:
-            let stream = ParakeetStream(model: model)
-            stream.runBuffered(audio: audio)
-            text = stream.text; wallTimes = stream.wallTimes; chunkMs = 160
+            if let h = option("--horizon").flatMap(Int.init) {
+                let stream = ParakeetCachedStream(model: model, horizon: h)
+                stream.runBuffered(audio: audio)
+                text = stream.text; wallTimes = stream.wallTimes; chunkMs = 160
+            } else {
+                let stream = ParakeetStream(model: model)
+                stream.runBuffered(audio: audio)
+                text = stream.text; wallTimes = stream.wallTimes; chunkMs = 160
+            }
         }
         let wall = Date().timeIntervalSince(t1)
         print(text)
@@ -61,6 +70,59 @@ do {
         FileHandle.standardError.write(String(format: "load %.2fs | %d steps of %d ms | audio %.2fs, wall %.3fs (RTF %.4f) | per-step wall p50 %.2f ms p99 %.2f ms\n",
             load, w.count, chunkMs, Double(audio.count) / 16000, wall, wall / (Double(audio.count) / 16000),
             w[w.count / 2] * 1000, w[min(w.count - 1, w.count * 99 / 100)] * 1000).data(using: .utf8)!)
+    case "eval":
+        // Transcribes every manifest line with the streaming engine; resumable (skips done lines).
+        guard let kind = NemoModelKind(rawValue: option("--model", "nemotron")!) else { throw EngineError.io("unknown --model") }
+        let manifest = option("--manifest")!
+        let outPath = option("--out")!
+        let limit = Int(option("--limit", "1000000")!)!
+        let modelDir = URL(fileURLWithPath: option("--model-dir", "models/\(kind.dirName)")!)
+        let model = try NemotronModel(modelDir: modelDir, kind: kind, precision: option("--precision", "f32")!)
+        let latency = Int(option("--latency", kind == .nemotron ? "160" : "560")!)!
+        var done = Set<String>()
+        if let existing = try? String(contentsOfFile: outPath, encoding: .utf8) {
+            for line in existing.split(separator: "\n") {
+                if let d = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any], let a = d["audio"] as? String { done.insert(a) }
+            }
+        } else {
+            try FileManager.default.createDirectory(at: URL(fileURLWithPath: outPath).deletingLastPathComponent(), withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: outPath, contents: nil)
+        }
+        let out = try FileHandle(forWritingTo: URL(fileURLWithPath: outPath))
+        out.seekToEndOfFile()
+        let lines = try String(contentsOfFile: manifest, encoding: .utf8).split(separator: "\n").prefix(limit)
+        var n = 0
+        for line in lines {
+            guard let d = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  let path = d["audio"] as? String, !done.contains(path) else { continue }
+            let audio = try AudioFile.readMono16k(URL(fileURLWithPath: path))
+            let t0 = Date()
+            let hyp: String
+            switch kind {
+            case .nemotron:
+                let stream = NemotronStream(model: model, lookahead: latency / 80 - 1)
+                let mel = model.frontend.features(audio)
+                stream.runBuffered(mel: mel, frames: audio.count / 160 + 1, validFrames: audio.count / 160 + 1)
+                hyp = stream.text
+            case .parakeet:
+                if let h = option("--horizon").flatMap(Int.init) {
+                    let stream = ParakeetCachedStream(model: model, horizon: h)
+                    stream.runBuffered(audio: audio)
+                    hyp = stream.text
+                } else {
+                    let stream = ParakeetStream(model: model)
+                    stream.runBuffered(audio: audio)
+                    hyp = stream.text
+                }
+            }
+            let rec: [String: Any] = ["audio": path, "ref": d["text"] ?? "", "hyp": hyp,
+                                      "duration": Double(audio.count) / 16000, "wall": Date().timeIntervalSince(t0)]
+            out.write(try JSONSerialization.data(withJSONObject: rec, options: [.sortedKeys]))
+            out.write("\n".data(using: .utf8)!)
+            n += 1
+            if n % 100 == 0 { FileHandle.standardError.write("\(n) done\n".data(using: .utf8)!) }
+        }
+        try out.close()
     case "convert":
         let model = args.count > 1 ? args[1] : "nemotron"
         let precision = WeightConverter.Precision(rawValue: option("--precision", "f16")!)!

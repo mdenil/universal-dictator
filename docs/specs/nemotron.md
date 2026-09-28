@@ -196,7 +196,16 @@ The output rows sent to the decoder are `valid_out_len` frames per step (the las
 
 ### 6.4 Offline vs streaming equivalence and the end-of-stream frame
 
-The streaming frames equal the offline frames up to floating-point noise (measured below). The only structural difference is at the end. The streaming buffer counts mel frame `N//160` (always 0.0) as valid (§1). The last chunk is not cropped. So the streaming output can have a different number of encoder frames from the offline output, whose length is `calc_length(N//160)`. See "Noise floor" for the frame counts measured on dev20.
+Every streaming frame outside the final chunk equals the offline frame up to fp32 noise. On dev20 the worst difference is ≤ 1e-5 max-abs, at both [70,1] and [70,6] (§10).
+
+The final chunk differs. Two source behaviours cause this:
+
+1. The buffer counts mel frame `N//160` as valid (§1), and that frame is always 0.0. The frames of the last chunk that see it differ from offline, where the frame is masked. The difference is up to 0.28 max-abs in the last 1 frame at [70,1], and up to 5 frames at [70,6].
+2. `__iter__` **stops** when the remaining piece is shorter than `sampling_frames[1] = 8` mel frames (`streaming_utils.py:1628-1638`). So up to 7 trailing mel frames are never encoded.
+
+So the streaming output can have one more or one fewer encoder frame than offline. Offline has `calc_length(N//160)` frames. On dev20 at [70,1], 6 of 20 utterances lose their final token(s) because of this. Five lose the final `.`. One (`6432-63722-0000`) ends "…givin up fis" instead of "…givin up fishing." (§10).
+
+This is reference behaviour. It is what the L5 baseline contains, and it is not something the engine has to copy.
 
 ## 7. RNN-T decoder, joint and greedy decoding
 

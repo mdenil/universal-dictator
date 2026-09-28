@@ -495,3 +495,66 @@ extension Tensor {
         return Tensor(buffer: buffer, offset: offset, shape: shape, dtype: dtype)
     }
 }
+
+// MARK: - Region caching (Parakeet Stage B: frozen-prefix caching for chunked_limited_with_rc)
+
+extension FastConformerEncoder {
+    /// Per-layer frozen context for region streaming: projected K/V of up to `capacity` frozen frames and
+    /// the conv inputs of the last (K-1)/2 frozen frames. Buffers ping-pong so updates never overlap.
+    public final class RegionCache {
+        let capacity: Int
+        let maxRegion: Int
+        var kv: [[Tensor]], vv: [[Tensor]], conv: [[Tensor]]
+        var parity = 0
+        public internal(set) var cached = 0
+
+        init(_ cfg: FastConformerConfig, capacity: Int, maxRegion: Int, ctx: MetalContext) {
+            self.capacity = capacity
+            self.maxRegion = maxRegion
+            let D = cfg.dModel, half = (cfg.convKernel - 1) / 2
+            func mk(_ rows: Int) -> Tensor {
+                let t = Tensor(ctx, shape: [rows, D], dtype: .f32)
+                memset(t.contents, 0, t.byteCount)
+                return t
+            }
+            kv = (0..<cfg.layers).map { _ in [mk(capacity + maxRegion), mk(capacity + maxRegion)] }
+            vv = (0..<cfg.layers).map { _ in [mk(capacity + maxRegion), mk(capacity + maxRegion)] }
+            conv = (0..<cfg.layers).map { _ in [mk(2 * half + maxRegion), mk(2 * half + maxRegion)] }
+        }
+    }
+
+    public func makeRegionCache(capacity: Int, maxRegion: Int) -> RegionCache {
+        precondition(!config.causalConv, "region caching is for symmetric-conv encoders")
+        preparePositionTables(range: -(maxRegion - 1)...(capacity + maxRegion - 1))
+        return RegionCache(config, capacity: capacity, maxRegion: maxRegion, ctx: ctx)
+    }
+
+    /// Runs all layers over region frames x [R, D] (the newest frames), attending to the frozen cache,
+    /// then freezes the first `advance` region frames into the cache. `ranges` index keys laid out as
+    /// [cached ; region]. Output rows go to `out` [R, D].
+    func encodeRegion(_ s: Step, _ ws: Workspace, cache c: RegionCache, x input: Tensor, ranges: Tensor,
+                      advance: Int, out: Tensor) {
+        let cfg = config
+        let R = input.shape[0], nc = c.cached, half = (cfg.convKernel - 1) / 2
+        precondition(R <= c.maxRegion && advance <= R)
+        let newNc = min(c.capacity, nc + advance)
+        let p = c.parity, np = 1 - p
+        var x = ws.x.rows(0, R), y = ws.y.rows(0, R)
+        s.copy(input, into: x)
+        for li in 0..<cfg.layers {
+            let keys = c.kv[li][p].rows(0, nc + R), values = c.vv[li][p].rows(0, nc + R)
+            let convIn = c.conv[li][p].rows(0, 2 * half + R)
+            s.zero(convIn.rows(half + R, half))   // right edge: zero padding like the buffer end
+            encodeLayer(s, ws, li, x: x, out: y, ranges: ranges, keys: keys, values: values, convIn: convIn, validFrames: R)
+            if newNc > 0 {
+                s.copy(keys.rows(nc + advance - newNc, newNc), into: c.kv[li][np].rows(0, newNc))
+                s.copy(values.rows(nc + advance - newNc, newNc), into: c.vv[li][np].rows(0, newNc))
+            }
+            s.copy(convIn.rows(advance, half), into: c.conv[li][np].rows(0, half))
+            swap(&x, &y)
+        }
+        s.copy(x, into: out.rows(0, R))
+        c.parity = np
+        c.cached = newNc
+    }
+}

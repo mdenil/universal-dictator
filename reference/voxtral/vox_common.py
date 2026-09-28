@@ -76,16 +76,34 @@ def read_utts(jsonl: str | Path) -> list[dict]:
 # Model loading
 # ----------------------------------------------------------------------------
 
+_SCRATCH: dict = {}
+
+
+def _up(w, dtype):
+    """Copy a bf16 weight into a reused fp32 scratch buffer (avoids a fresh allocation, and the
+    page faults that come with it, for every matmul). Execution is stream-ordered on CPU and MPS,
+    so reusing one buffer between consecutive ops is safe."""
+    if w.dtype == dtype:
+        return w
+    key = (w.device, dtype)
+    buf = _SCRATCH.get(key)
+    if buf is None or buf.numel() < w.numel():
+        buf = torch.empty(max(w.numel(), 16384 * 3072), dtype=dtype, device=w.device)
+        _SCRATCH[key] = buf
+    out = buf[: w.numel()].view(w.shape)
+    out.copy_(w)
+    return out
+
+
 def _linear_upcast(self, x):
-    w = self.weight if self.weight.dtype == x.dtype else self.weight.to(x.dtype)
-    b = None if self.bias is None else (self.bias if self.bias.dtype == x.dtype else self.bias.to(x.dtype))
-    return F.linear(x, w, b)
+    b = None if self.bias is None else self.bias.to(x.dtype)
+    return F.linear(x, _up(self.weight, x.dtype), b)
 
 
 def _lm_head_upcast_chunked(self, x, chunk=16384):
     # Tied 131072x3072 head: upcast in row chunks so the temporary is 200 MB, not 1.6 GB.
     w = self.weight
-    outs = [F.linear(x, w[i:i + chunk].to(x.dtype)) for i in range(0, w.shape[0], chunk)]
+    outs = [F.linear(x, _up(w[i:i + chunk], x.dtype)) for i in range(0, w.shape[0], chunk)]
     return torch.cat(outs, dim=-1)
 
 
@@ -102,7 +120,7 @@ def enable_fp32_compute(model) -> None:
             m.forward = MethodType(_linear_upcast, m)
         elif isinstance(m, nn.Conv1d):
             def _conv(inp, w, b, _m=m):
-                return nn.Conv1d._conv_forward(_m, inp, w.to(inp.dtype), None if b is None else b.to(inp.dtype))
+                return nn.Conv1d._conv_forward(_m, inp, _up(w, inp.dtype), None if b is None else b.to(inp.dtype))
             m._conv_forward = _conv
         elif isinstance(m, nn.Embedding):
             m.forward = MethodType(_embedding_upcast, m)

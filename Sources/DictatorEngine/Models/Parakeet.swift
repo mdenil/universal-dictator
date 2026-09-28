@@ -83,3 +83,121 @@ public final class ParakeetStream {
         wallTimes.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
     }
 }
+
+/// Parakeet Stage B: frozen-prefix caching. Each step re-encodes only the newest region
+/// (chunk + right context + `horizon` extra frames); older frames keep the per-layer K/V and conv
+/// inputs computed when they left the region. Mel features and normalization for the region come
+/// from the same buffer as the reference, so the only difference from Stage A is the frozen context.
+public final class ParakeetCachedStream {
+    public let model: NemotronModel
+    public let horizon: Int
+    let leftSamples = 89600, chunkSamples = 2560, rightSamples = 6400, frameSamples = 1280
+    let chunkFrames = 2, rightFrames = 5
+    let ws: FastConformerEncoder.Workspace
+    let cache: FastConformerEncoder.RegionCache
+    var frozen = 0                 // global encoder frames < frozen are in the cache
+    var decState: RNNTDecoder.State
+    let regionOut: Tensor
+    public private(set) var tokens: [Int] = []
+    public private(set) var wallTimes: [Double] = []
+    public private(set) var gpuTimes: [Double] = []
+
+    public init(model: NemotronModel, horizon: Int) {
+        precondition(model.kind == .parakeet)
+        self.model = model
+        self.horizon = horizon
+        let maxRegion = chunkFrames + rightFrames + horizon + 2
+        let maxMel = 8 * (maxRegion + 2) + 16
+        ws = model.encoder.makeWorkspace(maxT: maxRegion + 3, maxMel: maxMel)
+        cache = model.encoder.makeRegionCache(capacity: 72, maxRegion: maxRegion)
+        decState = model.decoder.initialState()
+        regionOut = Tensor(shape: [maxRegion, model.encoder.config.dModel])
+    }
+
+    public var text: String { model.tokenizer.decode(tokens) }
+
+    /// Same outer loop (buffer bookkeeping and decode schedule) as `ParakeetStream.runBuffered`.
+    public func runBuffered(audio: [Float]) {
+        let n = audio.count
+        var leftSample = 0
+        var rightSample = min(chunkSamples + rightSamples, n)
+        var bufStart = 0, bufEnd = 0, leftLen = 0, chunkLen = 0, rightLen = 0
+        while leftSample < n {
+            let isLast = rightSample >= n
+            let added = rightSample - leftSample
+            bufEnd += added
+            leftLen += chunkLen
+            let right = rightLen + added
+            if isLast { chunkLen = right; rightLen = 0 } else { chunkLen = min(chunkSamples, right); rightLen = right - chunkLen }
+            if leftLen > leftSamples { bufStart += leftLen - leftSamples; leftLen = leftSamples }
+            step(buffer: Array(audio[bufStart..<bufEnd]), bufStart: bufStart, leftLen: leftLen, isLast: isLast)
+            leftSample = rightSample
+            rightSample = min(rightSample + chunkSamples, n)
+        }
+    }
+
+    func step(buffer: [Float], bufStart: Int, leftLen: Int, isLast: Bool) {
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        let fe = model.frontend, enc = model.encoder
+        let bins = fe.nMels
+        var mel = fe.features(buffer)
+        let frames = mel.count / bins
+        let valid = fe.validFrames(samples: buffer.count)
+        fe.normalizePerFeature(&mel, T: frames, valid: valid)
+        let g0 = bufStart / frameSamples                 // global index of buffer encoder frame 0
+        let E = enc.subsampledLength(frames)
+        var validE = valid
+        for _ in 0..<3 { validE = (validE - 1) / 2 + 1 }
+        let gE = g0 + validE                             // global end of valid encoder frames
+        let F = max(frozen, g0)                          // region start (global)
+        let R = gE - F
+        guard R > 0 else { return }
+        _ = E
+
+        // Subsample a mel window with a 2-frame left margin so region frames see real left context.
+        let margin = min(2, F - g0)
+        let melStart = 8 * (F - margin - g0)
+        let melRows = frames - melStart
+        let melT = Tensor(shape: [melRows, bins])
+        mel.withUnsafeBufferPointer { m in memcpy(melT.contents, m.baseAddress! + melStart * bins, melRows * bins * 4) }
+        let s = Step()
+        let Tsub = enc.subsampledLength(melRows)
+        let subOut = ws.y.rows(0, Tsub)
+        enc.encodeSubsampling(s, ws, mel: melT, validMel: valid - melStart, out: subOut)
+        let xRegion = ws.r1.rows(0, R)
+        s.copy(subOut.rows(margin, R), into: xRegion)
+
+        // Advance the frozen frontier so the next region is chunk + right + horizon frames.
+        let steadyRegion = chunkFrames + rightFrames + horizon
+        let nextFrozen = isLast ? F : max(F, min(gE, gE + chunkFrames - steadyRegion))
+        let advance = nextFrozen - F
+
+        // Mask ranges over keys [cached ; region] in global coordinates.
+        let keyStart = F - cache.cached
+        var rr = [Int32]()
+        for q in F..<gE {
+            let cs = (q / chunkFrames) * chunkFrames
+            let lo = max(cs - 70, keyStart), hi = min(cs + chunkFrames + rightFrames, gE)
+            rr += [Int32(lo - keyStart), Int32(hi - keyStart)]
+        }
+        let ranges = ws.ranges.rows(0, R)
+        rr.withUnsafeBytes { ranges.contents.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
+        enc.encodeRegion(s, ws, cache: cache, x: xRegion, ranges: ranges, advance: advance, out: regionOut)
+        frozen = nextFrozen
+
+        // Decode the chunk frames exactly as the reference schedule does.
+        let first = g0 + leftLen / frameSamples
+        let outLen = isLast ? max(0, gE - first) : chunkSamples / frameSamples
+        let proj = Tensor(shape: [max(outLen, 1), model.decoder.hidden])
+        if outLen > 0 {
+            s.gemm(regionOut.rows(first - F, outLen), model.jointEncW, bias: model.jointEncB, out: proj.rows(0, outLen))
+        }
+        gpuTimes.append(s.run())
+        if outLen > 0 {
+            var newTokens = [Int]()
+            model.decoder.greedy(encProj: proj.rows(0, outLen).toFloats(), frames: outLen, state: &decState, tokens: &newTokens)
+            tokens += newTokens
+        }
+        wallTimes.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
+    }
+}
