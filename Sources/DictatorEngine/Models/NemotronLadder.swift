@@ -32,6 +32,42 @@ public func compareTensors(_ name: String, ours: [Float], ref: [Float], shape: [
 }
 
 public enum NemotronLadder {
+    /// Reference mel (time-major), frames and valid frames of the last `run` call.
+    public nonisolated(unsafe) static var lastMel: ([Float], Int, Int)?
+
+    /// L5 streaming parity: runs our cache-aware streamer on the reference mel and compares the
+    /// per-chunk encoder output and final tokens with NeMo's official streaming run.
+    public static func streamParity(model: NemotronModel, mel: [Float], frames: Int, validFrames: Int,
+                                    lookahead: Int, streamDir: URL) throws -> [LadderRow] {
+        let stream = NemotronStream(model: model, lookahead: lookahead)
+        var encRows = [Float]()
+        stream.encTap = { encRows += $0 }
+        stream.runBuffered(mel: mel, frames: frames, validFrames: validFrames)
+        var rows = [LadderRow]()
+        if let g = try? NPYArray.load(streamDir.appendingPathComponent("stream_enc_out.npy")) {
+            var ref = try g.floats()
+            var shape = g.shape
+            if shape.count == 2 && shape[0] == model.encoder.config.dModel && shape[1] != model.encoder.config.dModel {
+                let (D, T) = (shape[0], shape[1])
+                var tm = [Float](repeating: 0, count: D * T)
+                for d in 0..<D { for t in 0..<T { tm[t * D + d] = ref[d * T + t] } }
+                ref = tm; shape = [T, D]
+            }
+            rows.append(compareTensors("L5 stream enc_out", ours: encRows, ref: ref, shape: shape))
+            if ProcessInfo.processInfo.environment["DICTATOR_LADDER_FRAMES"] == "1", encRows.count == ref.count {
+                let D = model.encoder.config.dModel
+                for t in 0..<(ref.count / D) {
+                    let r = compareTensors("frame \(t)", ours: Array(encRows[(t * D)..<((t + 1) * D)]), ref: Array(ref[(t * D)..<((t + 1) * D)]), shape: [D])
+                    if r.cosine < 0.9999 { print("  ", r) }
+                }
+            }
+        }
+        let refTokens = (try? NPYArray.load(streamDir.appendingPathComponent("tokens.npy")).ints()) ?? []
+        rows.append(LadderRow(name: "L5 stream tokens", shape: [stream.tokens.count], cosine: stream.tokens == refTokens ? 1 : 0,
+                              maxAbs: Float(zip(stream.tokens, refTokens).prefix { $0 == $1 }.count), refMaxAbs: Float(refTokens.count), skipped: nil))
+        return rows
+    }
+
     /// Runs the offline ladder for one utterance directory of golden tensors.
     /// Expects: audio.npy, mel.npy [T,128], pre_encode.npy, layer_XX_out.npy, enc_out.npy, tokens.npy.
     public static func run(modelDir: URL, goldenDir: URL, left: Int, right: Int, config: FastConformerConfig = .nemotron) throws -> (rows: [LadderRow], text: String, refText: String) {
@@ -46,8 +82,16 @@ public enum NemotronLadder {
         let fe = NemoMelFrontend(filterbank: try weights.floats("preprocessor.featurizer.fb"),
                                  window: try weights.floats("preprocessor.featurizer.window"))
         let ourMel = fe.features(audio)
-        let refMelArr = golden("mel")!
-        let refMel = try refMelArr.floats()
+        var refMelArr = golden("mel")!
+        var refMel = try refMelArr.floats()
+        if refMelArr.shape.count == 2 && refMelArr.shape[0] == config.melBins && refMelArr.shape[1] != config.melBins {
+            // Stored channel-first [bins, T]: transpose to time-major.
+            let (B, T) = (refMelArr.shape[0], refMelArr.shape[1])
+            var tm = [Float](repeating: 0, count: B * T)
+            for b in 0..<B { for t in 0..<T { tm[t * B + b] = refMel[b * T + t] } }
+            refMel = tm
+            refMelArr.shape = [T, B]
+        }
         rows.append(compareTensors("L0 mel", ours: ourMel, ref: refMel, shape: refMelArr.shape))
 
         // L2: encoder, fed the reference mel.
@@ -57,7 +101,7 @@ public enum NemotronLadder {
         let out = enc.forwardOffline(mel: refMel, melFrames: melFrames, validMel: fe.validFrames(samples: audio.count),
                                      left: left, right: right) { name, t in taps[name] = t }
         for name in ["pre_encode"] + (0..<config.layers).map { String(format: "layer_%02d_out", $0) } {
-            guard let g = golden(name), let t = taps[name] else {
+            guard let g = golden(name) ?? (name == "pre_encode" ? golden("enc_in") : nil), let t = taps[name] else {
                 rows.append(LadderRow(name: name, shape: [], cosine: .nan, maxAbs: .nan, refMaxAbs: .nan, skipped: "missing"))
                 continue
             }
@@ -81,6 +125,7 @@ public enum NemotronLadder {
                               maxAbs: Float(zip(tokens, refTokens).prefix { $0 == $1 }.count), refMaxAbs: Float(refTokens.count),
                               skipped: nil))
         let refText = (try? String(contentsOf: goldenDir.appendingPathComponent("transcript.txt"), encoding: .utf8)) ?? ""
+        lastMel = (refMel, melFrames, fe.validFrames(samples: audio.count))
         return (rows, sp.decode(tokens), refText)
     }
 }

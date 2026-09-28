@@ -28,14 +28,14 @@ CFG = {
 }
 
 
-def mel_spec(audio: torch.Tensor, fb: torch.Tensor, normalize: bool):
+def mel_spec(audio: torch.Tensor, fb: torch.Tensor, window: torch.Tensor, normalize: bool):
     n = audio.shape[0]
     y = torch.cat([audio[:1], audio[1:] - 0.97 * audio[:-1]])
     y = F.pad(y, (256, 256))
     n_frames = n // 160 + 1
     idx = torch.arange(n_frames)[:, None] * 160 + torch.arange(512)[None, :]
     w = torch.zeros(512)
-    w[56:456] = torch.hann_window(400, periodic=False)
+    w[56:456] = window  # checkpoint buffer (symmetric Hann, differs from torch.hann_window at 1e-8)
     X = torch.fft.rfft(y[idx] * w, dim=-1)  # [T, 257]
     mag = torch.sqrt(X.real**2 + X.imag**2)
     p = mag.pow(2.0)
@@ -224,13 +224,14 @@ def main():
     model = load_model(args.model)
     sd = {k: v.float() for k, v in model.state_dict().items()}
     fb = sd["preprocessor.featurizer.fb"][0]
+    window = sd["preprocessor.featurizer.window"]
     worst = {}
     for dname, acs in cfg["dirs"].items():
         udirs = sorted((DATA / "golden" / args.model / dname).iterdir())[: args.n_utts]
         for ud in udirs:
             g = lambda n: np.load(ud / f"{n}.npy")  # noqa: E731
             audio = torch.from_numpy(g("audio"))
-            mel, t_valid = mel_spec(audio, fb, cfg["normalize"])
+            mel, t_valid = mel_spec(audio, fb, window, cfg["normalize"])
             res = {"mel": rel(mel, g("mel"))}
             # From here on feed the golden input of each stage (pipeline-order isolation).
             gm = torch.from_numpy(g("mel"))

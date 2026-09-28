@@ -54,6 +54,8 @@ public final class NemotronStream {
     public private(set) var gpuTimes: [Double] = []
     /// Wall seconds per step including CPU decoding.
     public private(set) var wallTimes: [Double] = []
+    /// Receives the kept encoder output rows of each chunk (parity testing).
+    public var encTap: (([Float]) -> Void)?
 
     public init(model: NemotronModel, lookahead: Int) {
         self.model = model
@@ -89,6 +91,7 @@ public final class NemotronStream {
         }
         gpuTimes.append(s.run())
         _ = T
+        if keep > 0, let tap = encTap { tap(encOut.rows(0, keep).toFloats()) }
         var newTokens = [Int]()
         if keep > 0 {
             let p = proj.rows(0, keep).toFloats()
