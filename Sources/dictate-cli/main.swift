@@ -247,6 +247,21 @@ do {
     case "probe":
         let w = try? SafeTensorsFile(URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b/nemo_extracted/weights.safetensors"))
         if args.contains("rnnt") { try Probe.rnntDecoderCPU(modelDir: URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b")) } else if args.contains("gemm") { Probe.gemmShapes() } else if args.contains("voxtral") { Probe.voxtralShapes() } else { Probe.gemmSmallM(weights: w) }
+    case "ladder" where args.count > 1 && args[1] == "voxtral":
+        // ladder voxtral --golden-root data/golden/voxtral/offline [--weights model.safetensors]
+        let model = try VoxtralModel(modelDir: URL(fileURLWithPath: "models/Voxtral-Mini-4B-Realtime-2602"),
+                                     weights: option("--weights", "model.safetensors")!)
+        let root = URL(fileURLWithPath: option("--golden-root", "data/golden/voxtral/offline")!)
+        let dirs = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            .filter { $0.hasDirectoryPath }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var exact = 0
+        for d in dirs {
+            let r = try VoxtralLadder.run(model: model, goldenDir: d)
+            print("== \(d.lastPathComponent)"); for row in r.rows { print(row) }
+            print("ours: \(r.text)\nref:  \(r.refText)")
+            if r.rows.last?.cosine == 1 { exact += 1 }
+        }
+        print("L4 Voxtral tokens exact: \(exact)/\(dirs.count)")
     case "ladder":
         guard let kind = NemoModelKind(rawValue: args.count > 1 ? args[1] : "nemotron") else { throw EngineError.io("ladder: unknown model") }
         let ctxParts = option("--context", kind == .nemotron ? "70,1" : "70,2,5")!.split(separator: ",").map { Int($0)! }
