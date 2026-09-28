@@ -9,12 +9,38 @@ commands:
   transcribe   transcribe a WAV/FLAC file with streaming inference:
                transcribe <audio> [--model nemotron|parakeet] [--latency 160|560] [--precision f32|f16]
                parakeet: default exact buffered (Stage A); --horizon H uses frozen-prefix caching
-  eval         transcribe a manifest to jsonl (score with eval/score.py):
-               eval --model nemotron|parakeet --manifest <jsonl> --out <jsonl> [--latency] [--precision] [--limit N]
+  eval         live-stream a manifest to jsonl (score with eval/score.py, eval/latency.py):
+               eval --model nemotron-160|nemotron-560|parakeet|parakeet-h<H>|voxtral --manifest <jsonl> --out <jsonl>
+                    [--precision f16|f32] [--weights dictator-q8.safetensors] [--limit N]
   convert      write converted weights: convert nemotron|parakeet --precision f16
   ladder       compare against golden tensors:
                ladder nemotron --golden <utt-dir> [--context 70,1] [--model-dir models/...]
 """
+
+/// Builds a transcriber factory from a model spec:
+///   nemotron[-160|-560]  parakeet (exact) | parakeet-h<H> (cached)  voxtral
+/// with --precision f32|f16 (NeMo models) and --weights <file> (Voxtral).
+func transcriberFactory(spec: String) throws -> () -> StreamingTranscriber {
+    let precision = option("--precision", "f16")!
+    if spec.hasPrefix("nemotron") {
+        let latency = spec.hasSuffix("560") ? 560 : Int(option("--latency", "160")!)!
+        let model = try NemotronModel(modelDir: URL(fileURLWithPath: "models/\(NemoModelKind.nemotron.dirName)"), kind: .nemotron, precision: precision)
+        return { NemotronStream(model: model, lookahead: latency / 80 - 1) }
+    }
+    if spec.hasPrefix("parakeet") {
+        let model = try NemotronModel(modelDir: URL(fileURLWithPath: "models/\(NemoModelKind.parakeet.dirName)"), kind: .parakeet, precision: precision)
+        if let r = spec.range(of: "-h"), let h = Int(spec[r.upperBound...]) {
+            return { ParakeetCachedStream(model: model, horizon: h).live() }
+        }
+        return { ParakeetStream(model: model).live() }
+    }
+    if spec == "voxtral" {
+        let model = try VoxtralModel(modelDir: URL(fileURLWithPath: "models/Voxtral-Mini-4B-Realtime-2602"),
+                                     weights: option("--weights", "dictator-q8.safetensors")!)
+        return { VoxtralLive(model: model) }
+    }
+    throw EngineError.io("unknown model spec \(spec)")
+}
 
 func option(_ name: String, _ def: String? = nil) -> String? {
     if let i = args.firstIndex(of: name), i + 1 < args.count { return args[i + 1] }
@@ -91,14 +117,13 @@ do {
             FileHandle.standardError.write(String(format: "GPU per step: encoder p50 %.1f ms, decoder p50 %.1f ms\n", e[e.count / 2] * 1000, d[d.count / 2] * 1000).data(using: .utf8)!)
         }
     case "eval":
-        // Transcribes every manifest line with the streaming engine; resumable (skips done lines).
-        guard let kind = NemoModelKind(rawValue: option("--model", "nemotron")!) else { throw EngineError.io("unknown --model") }
+        // Transcribes every manifest line with a live streaming transcriber (audio pushed in 20 ms
+        // pieces); resumable (skips done lines). Records per-step emission data for latency analysis.
+        let spec = option("--model", "nemotron")!
         let manifest = option("--manifest")!
         let outPath = option("--out")!
         let limit = Int(option("--limit", "1000000")!)!
-        let modelDir = URL(fileURLWithPath: option("--model-dir", "models/\(kind.dirName)")!)
-        let model = try NemotronModel(modelDir: modelDir, kind: kind, precision: option("--precision", "f32")!)
-        let latency = Int(option("--latency", kind == .nemotron ? "160" : "560")!)!
+        let makeTranscriber = try transcriberFactory(spec: spec)
         var done = Set<String>()
         if let existing = try? String(contentsOfFile: outPath, encoding: .utf8) {
             for line in existing.split(separator: "\n") {
@@ -117,26 +142,31 @@ do {
                   let path = d["audio"] as? String, !done.contains(path) else { continue }
             let audio = try AudioFile.readMono16k(URL(fileURLWithPath: path))
             let t0 = Date()
-            let hyp: String
-            switch kind {
-            case .nemotron:
-                let stream = NemotronStream(model: model, lookahead: latency / 80 - 1)
-                let mel = model.frontend.features(audio)
-                stream.runBuffered(mel: mel, frames: audio.count / 160 + 1, validFrames: audio.count / 160 + 1)
-                hyp = stream.text
-            case .parakeet:
-                if let h = option("--horizon").flatMap(Int.init) {
-                    let stream = ParakeetCachedStream(model: model, horizon: h)
-                    stream.runBuffered(audio: audio)
-                    hyp = stream.text
-                } else {
-                    let stream = ParakeetStream(model: model)
-                    stream.runBuffered(audio: audio)
-                    hyp = stream.text
+            let tr = makeTranscriber()
+            // Steps: [samples received, compute seconds, transcript so far] whenever a step emitted tokens.
+            var steps = [[Any]]()
+            var seen = 0
+            func record() {
+                let em = tr.emissions
+                while seen < em.count {
+                    let e = em[seen]
+                    var j = seen
+                    while j + 1 < em.count && em[j + 1].samplesSeen == e.samplesSeen && em[j + 1].computeSeconds == e.computeSeconds { j += 1 }
+                    steps.append([e.samplesSeen, e.computeSeconds, tr.text(of: em[0...j].map { $0.token })])
+                    seen = j + 1
                 }
             }
-            let rec: [String: Any] = ["audio": path, "ref": d["text"] ?? "", "hyp": hyp,
-                                      "duration": Double(audio.count) / 16000, "wall": Date().timeIntervalSince(t0)]
+            var i = 0
+            while i < audio.count {
+                let k = min(320, audio.count - i)
+                tr.push(Array(audio[i..<(i + k)])); i += k
+                record()
+            }
+            tr.finish(); record()
+            let st = tr.stepWallTimes
+            let rec: [String: Any] = ["audio": path, "ref": d["text"] ?? "", "hyp": tr.transcript,
+                                      "duration": Double(audio.count) / 16000, "wall": Date().timeIntervalSince(t0),
+                                      "steps": steps, "step_compute_total": st.reduce(0, +), "n_steps": st.count]
             out.write(try JSONSerialization.data(withJSONObject: rec, options: [.sortedKeys]))
             out.write("\n".data(using: .utf8)!)
             n += 1
