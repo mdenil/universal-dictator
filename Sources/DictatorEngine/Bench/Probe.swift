@@ -65,8 +65,9 @@ extension Probe {
             ("conv2 4x1280x3840", 4, 1280, 3840), ("dec q 1x4096x3072", 1, 4096, 3072), ("dec gate 1x9216x3072", 1, 9216, 3072),
             ("dec down 1x3072x9216", 1, 3072, 9216), ("head 1x131072x3072", 1, 131072, 3072)]
         for (name, M, N, K) in shapes {
-            for wdt in [DType.bf16, DType.f16] {
+            for wdt in [DType.bf16, DType.i8] {
                 let a = Tensor(ctx, shape: [M, K]), w = Tensor(ctx, shape: [N, K], dtype: wdt), c = Tensor(ctx, shape: [M, N])
+                if wdt == .i8 { w.qscale = Tensor(ctx, shape: [N]) }
                 var best = Double.infinity
                 for _ in 0..<5 { let s = Step(ctx); for _ in 0..<16 { s.gemm(a, w, out: c) }; best = min(best, s.run() / 16) }
                 let gbs = Double(N * K * wdt.size) / best / 1e9

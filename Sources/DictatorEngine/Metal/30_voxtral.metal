@@ -144,3 +144,90 @@ kernel void argmax_rows(device const float* x [[buffer(0)]], device int* idx [[b
         idx[row] = bj; val[row] = b;
     }
 }
+
+// ---------------------------------------------------------------- multi-query attention (Tq <= 8)
+// One threadgroup (128 threads) per head handles all Tq queries, so each K/V row is read once per
+// head instead of once per (query, head). Per-query key ranges; online softmax over key blocks.
+constant constexpr int MQ_MAX_Q = 8;
+constant constexpr int MQ_BLOCK = 256;
+
+template <typename TK>
+kernel void attention_mq(device const float* Q [[buffer(0)]], device const TK* K [[buffer(1)]],
+                         device const TK* V [[buffer(2)]], device const int2* ranges [[buffer(3)]],
+                         device float* out [[buffer(4)]], constant AttnParams& p [[buffer(5)]],
+                         uint h [[threadgroup_position_in_grid]],
+                         uint tid [[thread_index_in_threadgroup]]) {
+    threadgroup float qs[MQ_MAX_Q * 128];
+    threadgroup float sc[MQ_MAX_Q * MQ_BLOCK];
+    threadgroup float mrow[MQ_MAX_Q], lrow[MQ_MAX_Q], corr[MQ_MAX_Q];
+    const int nt = 128;
+    const int Tq = p.Tq, d = p.d;
+    const int kvh = int(h) / (p.Hq / p.Hkv);
+    for (int i = tid; i < Tq * d; i += nt) {
+        int q = i / d, e = i - q * d;
+        qs[q * d + e] = Q[(long)q * p.ldq + h * d + e];
+    }
+    if (int(tid) < Tq) { mrow[tid] = -INFINITY; lrow[tid] = 0; }
+    int lo = p.Tk, hi = 0;
+    for (int q = 0; q < Tq; q++) { lo = min(lo, max(ranges[q].x, 0)); hi = max(hi, min(ranges[q].y, p.Tk)); }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    // Output ownership: thread owns dim e = tid % d for queries q = tid / d, tid / d + nt/d, ...
+    const int e = int(tid) % d, qstep = nt / d, q0 = int(tid) / d;
+    float acc[MQ_MAX_Q];
+    for (int q = 0; q < MQ_MAX_Q; q++) acc[q] = 0;
+
+    for (int b0 = lo; b0 < hi; b0 += MQ_BLOCK) {
+        int bn = min(MQ_BLOCK, hi - b0);
+        // Scores: thread per key, all queries at once (K row read once).
+        for (int j = tid; j < bn; j += nt) {
+            device const TK* kr = K + (long)(b0 + j) * p.ldk + kvh * d;
+            float s[MQ_MAX_Q];
+            for (int q = 0; q < Tq; q++) s[q] = 0;
+            for (int x = 0; x < d; x++) {
+                float kv = float(kr[x]);
+                for (int q = 0; q < Tq; q++) s[q] += qs[q * d + x] * kv;
+            }
+            for (int q = 0; q < Tq; q++) {
+                int kj = b0 + j;
+                bool ok = kj >= ranges[q].x && kj < ranges[q].y;
+                sc[q * MQ_BLOCK + j] = ok ? s[q] * p.scale : -INFINITY;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        // Per-query block max / rescale (one simdgroup per query row, Tq <= 8 rows, 4 simdgroups).
+        for (int q = int(tid) / 32; q < Tq; q += nt / 32) {
+            float bm = -INFINITY;
+            for (int j = int(tid) % 32; j < bn; j += 32) bm = max(bm, sc[q * MQ_BLOCK + j]);
+            bm = simd_max(bm);
+            float nm = max(mrow[q], bm);
+            float bs = 0;
+            for (int j = int(tid) % 32; j < bn; j += 32) {
+                float v = sc[q * MQ_BLOCK + j];
+                float ex = v == -INFINITY ? 0.0f : exp(v - nm);
+                sc[q * MQ_BLOCK + j] = ex;
+                bs += ex;
+            }
+            bs = simd_sum(bs);
+            if (int(tid) % 32 == 0) {
+                float c = mrow[q] == -INFINITY ? 0.0f : exp(mrow[q] - nm);
+                corr[q] = c;
+                lrow[q] = lrow[q] * c + bs;
+                mrow[q] = nm;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (int q = q0, qi = 0; q < Tq; q += qstep, qi++) acc[qi] *= corr[q];
+        for (int j = 0; j < bn; j++) {
+            float v = float(V[(long)(b0 + j) * p.ldk + kvh * d + e]);
+            for (int q = q0, qi = 0; q < Tq; q += qstep, qi++) acc[qi] += sc[q * MQ_BLOCK + j] * v;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    for (int q = q0, qi = 0; q < Tq; q += qstep, qi++) {
+        float l = lrow[q];
+        out[(long)q * p.ldo + h * d + e] = l > 0 ? acc[qi] / l : 0.0f;
+    }
+}
+template [[host_name("attention_mq_f32")]] kernel void attention_mq<float>(device const float*, device const float*, device const float*, device const int2*, device float*, constant AttnParams&, uint, uint);
+template [[host_name("attention_mq_f16")]] kernel void attention_mq<half>(device const float*, device const half*, device const half*, device const int2*, device float*, constant AttnParams&, uint, uint);

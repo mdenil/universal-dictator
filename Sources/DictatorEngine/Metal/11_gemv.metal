@@ -76,14 +76,8 @@ kernel void gemv_nt(
             if (n >= p.N) break;
             device const TW* wr = W + (long)n * p.ldb + kb;
             if (WVec<TW>::N == 16) {
-                for (int k16 = int(lane); k16 < kl4 / 4; k16 += 32) {
-                    uint4 v = *(device const uint4*)((device const char*)wr + k16 * 16);
-                    float4 w0 = c4(v.x), w1 = c4(v.y), w2 = c4(v.z), w3 = c4(v.w);
-                    for (int m = 0; m < M; m++) {
-                        threadgroup const float4* x = xs + m * (GEMV_KB / 4) + 4 * k16;
-                        acc[r][m] += dot(w0, x[0]) + dot(w1, x[1]) + dot(w2, x[2]) + dot(w3, x[3]);
-                    }
-                }
+                // int8 rows are handled below, all GEMV_ROWS rows interleaved (more loads in flight).
+                break;
             } else if (WVec<TW>::N == 8) {
                 for (int k8 = int(lane); k8 < kl4 / 2; k8 += 32) {
                     float4 wa, wb;
@@ -95,6 +89,20 @@ kernel void gemv_nt(
                 for (int k4 = int(lane); k4 < kl4; k4 += 32) {
                     float4 w = load4(wr + k4 * 4);
                     for (int m = 0; m < M; m++) acc[r][m] += dot(w, xs[m * (GEMV_KB / 4) + k4]);
+                }
+            }
+        }
+        if (WVec<TW>::N == 16) {
+            const int nrows = min(GEMV_ROWS, p.N - n0);
+            for (int k16 = int(lane); k16 < kl4 / 4; k16 += 32) {
+                uint4 u[GEMV_ROWS];
+                for (int r = 0; r < nrows; r++) u[r] = *(device const uint4*)((device const char*)(W + (long)(n0 + r) * p.ldb + kb) + k16 * 16);
+                for (int r = 0; r < nrows; r++) {
+                    float4 w0 = c4(u[r].x), w1 = c4(u[r].y), w2 = c4(u[r].z), w3 = c4(u[r].w);
+                    for (int m = 0; m < M; m++) {
+                        threadgroup const float4* x = xs + m * (GEMV_KB / 4) + 4 * k16;
+                        acc[r][m] += dot(w0, x[0]) + dot(w1, x[1]) + dot(w2, x[2]) + dot(w3, x[3]);
+                    }
                 }
             }
         }

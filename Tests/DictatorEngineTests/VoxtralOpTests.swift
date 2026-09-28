@@ -37,6 +37,25 @@ final class VoxtralOpTests: XCTestCase {
         XCTAssertLessThan(maxAbsDiff(out.toFloats(), ref), 2e-5)
     }
 
+    func testMultiQueryAttentionMatchesPerQuery() {
+        // Encoder-like: 4 queries, 32 heads x 64, causal-window ranges over 700 keys (3 blocks).
+        let (Tq, Tk, H, d) = (4, 700, 32, 64)
+        let q = randomFloats(Tq * H * d, seed: 55), k = randomFloats(Tk * H * d, seed: 56), v = randomFloats(Tk * H * d, seed: 57)
+        let ranges: [Int32] = [0, 697, 1, 698, 2, 699, 3, 700]
+        let rt = Tensor(shape: [Tq, 2], dtype: .i32)
+        ranges.withUnsafeBytes { rt.contents.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
+        let qt = Tensor.from(q, shape: [Tq, H * d]), kt = Tensor.from(k, shape: [Tk, H * d]), vt = Tensor.from(v, shape: [Tk, H * d])
+        let a = Tensor(shape: [Tq, H * d]), b = Tensor(shape: [Tq, H * d])
+        var s = Step(); s.attention(q: qt, k: kt, v: vt, ranges: rt, out: a, heads: H, kvHeads: H, headDim: d); s.run()
+        // Reference: one query at a time (single-query kernel path).
+        s = Step()
+        for i in 0..<Tq {
+            s.attention(q: qt.rows(i, 1), k: kt, v: vt, ranges: rt.rows(i, 1), out: b.rows(i, 1), heads: H, kvHeads: H, headDim: d)
+        }
+        s.run()
+        XCTAssertLessThan(maxAbsDiff(a.toFloats(), b.toFloats()), 1e-5)
+    }
+
     func testRopeRotateHalf() {
         let (T, H, d, pos0) = (5, 3, 16, 1234)
         let x = randomFloats(T * H * d, seed: 61)

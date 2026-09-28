@@ -128,6 +128,9 @@ extension Step {
     }
 }
 
+/// Kill-switch for the multi-query attention kernel (DICTATOR_ATTN_MQ=0).
+let attentionMQEnabled = ProcessInfo.processInfo.environment["DICTATOR_ATTN_MQ"] != "0"
+
 struct Im2ColParams { var Tin: Int32, C: Int32, K: Int32, stride: Int32, pad: Int32, Tout: Int32 }
 struct RopeParams { var T: Int32, H: Int32, d: Int32, ld: Int32, pos0: Int32 }
 struct AttnParams { var Tq: Int32, Tk: Int32, Hq: Int32, Hkv: Int32, d: Int32, ldq: Int32, ldk: Int32, ldo: Int32; var scale: Float }
@@ -157,6 +160,15 @@ extension Step {
     /// Grouped-query attention with per-query key ranges. q [Tq, Hq*d], k/v [Tk, Hkv*d], out [Tq, Hq*d].
     public func attention(q: Tensor, k: Tensor, v: Tensor, ranges: Tensor, out: Tensor, heads Hq: Int, kvHeads Hkv: Int, headDim d: Int) {
         let Tq = q.count / (Hq * d), Tk = k.count / (Hkv * d)
+        // Few queries: one threadgroup per head reads each K/V row once for all queries.
+        if Tq > 1 && Tq <= 8 && d <= 128 && attentionMQEnabled {
+            let p = try! ctx.pipeline(k.dtype == .f16 ? "attention_mq_f16" : "attention_mq_f32")
+            bind(q, 0); bind(k, 1); bind(v, 2); bind(ranges, 3); bind(out, 4)
+            setBytes(AttnParams(Tq: Int32(Tq), Tk: Int32(Tk), Hq: Int32(Hq), Hkv: Int32(Hkv), d: Int32(d), ldq: Int32(Hq * d),
+                                ldk: Int32(Hkv * d), ldo: Int32(Hq * d), scale: 1 / Float(d).squareRoot()), 5)
+            dispatch(p, threadgroups: MTLSize(width: Hq, height: 1, depth: 1), threads: MTLSize(width: 128, height: 1, depth: 1))
+            return
+        }
         let p = try! ctx.pipeline(k.dtype == .f16 ? "attention_gqa_f16" : "attention_gqa_f32")
         bind(q, 0); bind(k, 1); bind(v, 2); bind(ranges, 3); bind(out, 4)
         setBytes(AttnParams(Tq: Int32(Tq), Tk: Int32(Tk), Hq: Int32(Hq), Hkv: Int32(Hkv), d: Int32(d), ldq: Int32(Hq * d),
