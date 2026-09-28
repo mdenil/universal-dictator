@@ -250,3 +250,7 @@ kernel void cast_f32_f16(device const float* a [[buffer(0)]], device half* out [
 kernel void cast_f16_f32(device const half* a [[buffer(0)]], device float* out [[buffer(1)]], uint i [[thread_position_in_grid]]) {
     out[i] = float(a[i]);
 }
+
+kernel void fill_zero_words(device uint* dst [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+    dst[i] = 0;
+}

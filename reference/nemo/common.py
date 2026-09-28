@@ -12,6 +12,15 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+
+# ASRModel.restore_from unpacks the 2.4 GB .nemo into a temporary directory; keep that inside the repo.
+_TMP = ROOT / "scratch" / "tmp"
+_TMP.mkdir(parents=True, exist_ok=True)
+os.environ["TMPDIR"] = str(_TMP)
+import tempfile  # noqa: E402
+
+tempfile.tempdir = str(_TMP)
+
 DATA = ROOT / "data"
 MODELS = ROOT / "models"
 THIRD_PARTY = ROOT / "third_party"

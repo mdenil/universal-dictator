@@ -139,17 +139,27 @@ def dump_one(model, rec, out_dir: Path, max_symbols: int):
             for h in hooks:
                 h.remove()
 
+        # The mel tensor has N//160 + 1 frames but only mel_len = N//160 are valid, so the subsampled tensor
+        # can carry one padded frame beyond enc_len. Padded frames are masked everywhere (subsampling time
+        # mask, attention pad mask, conv pad mask) and cannot influence valid frames, so only the valid
+        # frames are saved. T_full is recorded in meta.json.
         T = int(enc_len[0])
-        assert enc_out.shape[-1] == T, (enc_out.shape, T)
+        T_full = int(enc_out.shape[-1])
+        assert T_full - T in (0, 1), (T_full, T)
+        pm = cap["pad_mask"][0]
+        assert not bool(pm[:T].any()) and bool(pm[T:].all())
         save("audio", audio)
         save("mel", np32(mel[0]))
         save("mel_len", np.array(int(mel_len[0]), dtype=np.int64))
         for k in ["pre_encode", "enc_in"] + [k for k in cap if k.startswith("layer_")]:
-            save(k, np32(cap[k][0]))
-        save("pos_emb", np32(cap["pos_emb"][0]))
-        save("att_mask", cap["att_mask"][0].cpu().numpy().astype(np.uint8))
-        assert not bool(cap["pad_mask"].any()), "unexpected padding in batch-1 offline run"
-        enc_TD = enc_out[0].transpose(0, 1).contiguous()
+            save(k, np32(cap[k][0][:T]))
+        # pos_emb rows are positions T_full-1 .. -(T_full-1); keep the rows for T-1 .. -(T-1).
+        pe = cap["pos_emb"][0]
+        assert pe.shape[0] == 2 * T_full - 1
+        d = T_full - T
+        save("pos_emb", np32(pe[d : pe.shape[0] - d]))
+        save("att_mask", cap["att_mask"][0][:T, :T].cpu().numpy().astype(np.uint8))
+        enc_TD = enc_out[0, :, :T].transpose(0, 1).contiguous()
         save("enc_out", np32(enc_TD))
 
         tokens, frames, logits20 = greedy_rnnt(model, enc_TD, max_symbols)
@@ -173,6 +183,7 @@ def dump_one(model, rec, out_dir: Path, max_symbols: int):
             "mel_frames": int(mel.shape[-1]),
             "mel_len": int(mel_len[0]),
             "enc_frames": T,
+            "enc_frames_incl_padding": T_full,
             "att_context_size": list(enc.att_context_size),
             "threads": torch.get_num_threads(),
             "torch": torch.__version__,

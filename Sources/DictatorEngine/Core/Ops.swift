@@ -106,6 +106,14 @@ extension Step {
         dispatch1D(p, count: src.byteCount / 4)
     }
 
+    /// Zero-fills a tensor (byte size must be a multiple of 4).
+    public func zero(_ t: Tensor) {
+        precondition(t.byteCount % 4 == 0)
+        let p = try! ctx.pipeline("fill_zero_words")
+        bind(t, 0)
+        dispatch1D(p, count: t.byteCount / 4)
+    }
+
     public func cast(_ src: Tensor, into dst: Tensor) {
         precondition(src.count == dst.count)
         let name: String

@@ -62,6 +62,9 @@ public final class Step {
     }
 }
 
+/// Kill-switch for the skinny GEMV path (DICTATOR_GEMV=0 disables it).
+let gemvEnabled = ProcessInfo.processInfo.environment["DICTATOR_GEMV"] != "0"
+
 private func dtypeTag(_ d: DType) -> String {
     switch d {
     case .f32: return "f32"
@@ -82,8 +85,10 @@ extension Step {
         let N = w.shape[0]
         precondition(w.shape.count == 2 && w.shape[1] == K, "gemm: a \(a.shape) w \(w.shape)")
         precondition(out.count == M * N, "gemm: out \(out.shape) expected \(M)x\(N)")
-        let name = "gemm_nt_\(dtypeTag(a.dtype))_\(dtypeTag(w.dtype))_\(dtypeTag(out.dtype))"
-        let p = try! ctx.pipeline(name)
+        let types = "\(dtypeTag(a.dtype))_\(dtypeTag(w.dtype))_\(dtypeTag(out.dtype))"
+        // Skinny inputs are weight-bandwidth bound: use the GEMV kernel (reads each weight row once).
+        let skinny = M <= 8 && K % 4 == 0 && gemvEnabled
+        let p = try! ctx.pipeline(skinny ? "gemv_nt_" + types : "gemm_nt_" + types)
         var params = GemmParams(M: Int32(M), N: Int32(N), K: Int32(K), lda: Int32(K), ldb: Int32(K), ldc: Int32(N),
                                 hasBias: bias == nil ? 0 : 1, act: act.rawValue,
                                 hasResidual: residual == nil ? 0 : 1, ldr: Int32(N),
@@ -92,7 +97,12 @@ extension Step {
         if let b = bias { precondition(b.dtype == .f32); bind(b, 3) } else { bind(out, 3) }
         if let r = residual { precondition(r.dtype == out.dtype); bind(r, 4) } else { bind(out, 4) }
         enc.setBytes(&params, length: MemoryLayout<GemmParams>.stride, index: 5)
-        dispatch(p, threadgroups: MTLSize(width: (N + 63) / 64, height: (M + 63) / 64, depth: 1),
-                 threads: MTLSize(width: 128, height: 1, depth: 1))
+        if skinny {
+            dispatch(p, threadgroups: MTLSize(width: (N + 15) / 16, height: 1, depth: 1),
+                     threads: MTLSize(width: 128, height: 1, depth: 1))
+        } else {
+            dispatch(p, threadgroups: MTLSize(width: (N + 63) / 64, height: (M + 63) / 64, depth: 1),
+                     threads: MTLSize(width: 128, height: 1, depth: 1))
+        }
     }
 }

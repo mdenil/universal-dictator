@@ -174,114 +174,138 @@ public final class FastConformerEncoder {
         return t
     }
 
-    /// Encodes the subsampling: mel [T, melBins] -> [T', dModel]. Rows >= validOut are zero-masked
-    /// at each stage exactly like NeMo's MaskedConvSequential.
-    func encodeSubsampling(_ s: Step, mel: Tensor, validMel: Int, out: Tensor) {
+    /// Preallocated scratch for one encoder pass over at most `maxT` frames (post-subsampling) and
+    /// `maxMel` mel frames. Streaming steps reuse it, so the steady state allocates nothing.
+    public final class Workspace {
+        let maxT: Int, maxMel: Int
+        let tmpD, ffH, q, att, pw, r1, r2, r3, r4, x, y: Tensor
+        let sub1, sub2, sub3, sub4, sub5: Tensor
+        let ranges: Tensor
+
+        init(_ cfg: FastConformerConfig, maxT: Int, maxMel: Int, ctx: MetalContext) {
+            self.maxT = maxT
+            self.maxMel = maxMel
+            let D = cfg.dModel, C = cfg.subsamplingChannels
+            func mk(_ shape: [Int]) -> Tensor { Tensor(ctx, shape: shape, dtype: .f32) }
+            tmpD = mk([maxT, D]); ffH = mk([maxT, cfg.ffDim]); q = mk([maxT, D]); att = mk([maxT, D])
+            pw = mk([maxT, 2 * D]); r1 = mk([maxT, D]); r2 = mk([maxT, D]); r3 = mk([maxT, D]); r4 = mk([maxT, D])
+            x = mk([maxT, D]); y = mk([maxT, D])
+            func nx(_ t: Int) -> Int { cfg.causalSubsampling ? t / 2 + 1 : (t - 1) / 2 + 1 }
+            let T1 = nx(maxMel), F1 = nx(cfg.melBins), T2 = nx(T1), F2 = nx(F1), T3 = nx(T2), F3 = nx(F2)
+            sub1 = mk([T1 * F1 * C]); sub2 = mk([T2 * F2 * C]); sub3 = mk([T2 * F2 * C])
+            sub4 = mk([T3 * F3 * C]); sub5 = mk([T3 * F3 * C])
+            ranges = Tensor(ctx, shape: [maxT, 2], dtype: .i32)
+        }
+    }
+
+    public func makeWorkspace(maxT: Int, maxMel: Int) -> Workspace {
+        Workspace(config, maxT: maxT, maxMel: maxMel, ctx: ctx)
+    }
+
+    func nextLen(_ t: Int) -> Int { config.causalSubsampling ? (t + 3 - 3) / 2 + 1 : (t + 2 - 3) / 2 + 1 }
+
+    /// Encodes the subsampling: mel [T0, melBins] -> out [T3, dModel]. Rows beyond the valid length are
+    /// zeroed at each stage exactly like NeMo's MaskedConvSequential.
+    func encodeSubsampling(_ s: Step, _ ws: Workspace, mel: Tensor, validMel: Int, out: Tensor) {
         let cfg = config
         let C = cfg.subsamplingChannels
         let (pt, pl) = cfg.causalSubsampling ? (2, 2) : (1, 1)
-        func next(_ t: Int) -> Int { cfg.causalSubsampling ? (t + 3 - 3) / 2 + 1 : (t + 2 - 3) / 2 + 1 }
         let T0 = mel.shape[0], F0 = cfg.melBins
-        let T1 = next(T0), F1 = next(F0), T2 = next(T1), F2 = next(F1), T3 = next(T2), F3 = next(F2)
-        let v1 = next(validMel), v2 = next(v1), v3 = next(v2)
+        let T1 = nextLen(T0), F1 = nextLen(F0), T2 = nextLen(T1), F2 = nextLen(F1), T3 = nextLen(T2), F3 = nextLen(F2)
+        let v1 = nextLen(validMel), v2 = nextLen(v1), v3 = nextLen(v2)
+        precondition(out.shape[0] == T3)
         let x0 = mel.reshaped([T0, F0, 1])
-        let a1 = Tensor(ctx, shape: [T1, F1, C])
+        if validMel < T0 { maskRows(s, x0, validRows: validMel) }
+        let a1 = ws.sub1.prefix([T1, F1, C])
         s.conv2d(x0, w: sub.c0W, bias: sub.c0B, out: a1, stride: 2, padTop: pt, padLeft: pl, groups: 1, act: .relu, validH: v1)
-        let a2 = Tensor(ctx, shape: [T2, F2, C])
+        let a2 = ws.sub2.prefix([T2, F2, C])
         s.conv2d(a1, w: sub.c2W, bias: sub.c2B, out: a2, stride: 2, padTop: pt, padLeft: pl, groups: C, act: .none, validH: T2)
-        let a3 = Tensor(ctx, shape: [T2, F2, C])
+        let a3 = ws.sub3.prefix([T2, F2, C])
         s.gemm(a2.reshaped([T2 * F2, C]), sub.c3W, bias: sub.c3B, out: a3.reshaped([T2 * F2, C]), act: .relu)
-        // NeMo masks before the next strided layer using the stride-updated length (v2).
-        let a3m = maskRows(s, a3, validRows: v2)
-        let a4 = Tensor(ctx, shape: [T3, F3, C])
-        s.conv2d(a3m, w: sub.c5W, bias: sub.c5B, out: a4, stride: 2, padTop: pt, padLeft: pl, groups: C, act: .none, validH: T3)
-        let a5 = Tensor(ctx, shape: [T3, F3, C])
+        // NeMo masks before the next layer using the stride-updated length.
+        maskRows(s, a3, validRows: v2)
+        let a4 = ws.sub4.prefix([T3, F3, C])
+        s.conv2d(a3, w: sub.c5W, bias: sub.c5B, out: a4, stride: 2, padTop: pt, padLeft: pl, groups: C, act: .none, validH: T3)
+        let a5 = ws.sub5.prefix([T3, F3, C])
         s.gemm(a4.reshaped([T3 * F3, C]), sub.c6W, bias: sub.c6B, out: a5.reshaped([T3 * F3, C]), act: .relu)
-        let a5m = maskRows(s, a5, validRows: v3)
-        s.gemm(a5m.reshaped([T3, F3 * C]), sub.outW, bias: sub.outB, out: out, alpha: 1, outScale: cfg.xscale ? Float(cfg.dModel).squareRoot() : 1)
+        maskRows(s, a5, validRows: v3)
+        s.gemm(a5.reshaped([T3, F3 * C]), sub.outW, bias: sub.outB, out: out, outScale: cfg.xscale ? Float(cfg.dModel).squareRoot() : 1)
     }
 
-    /// Zeroes rows >= validRows (first axis). Returns the same tensor.
-    func maskRows(_ s: Step, _ x: Tensor, validRows: Int) -> Tensor {
+    /// Zeroes rows >= validRows along the first axis.
+    func maskRows(_ s: Step, _ x: Tensor, validRows: Int) {
         let T = x.shape[0]
-        if validRows >= T { return x }
-        let rowElems = x.count / T
-        let zero = Tensor(ctx, shape: [(T - validRows) * rowElems], dtype: x.dtype)
-        memset(zero.contents, 0, zero.byteCount)
-        s.copy(zero, into: x.rows(validRows, T - validRows).reshaped([(T - validRows) * rowElems]))
-        return x
+        if validRows >= T { return }
+        s.zero(x.rows(max(validRows, 0), T - max(validRows, 0)))
     }
 
     /// Hook for capturing intermediate tensors (golden-tensor comparisons). Called with a name and
-    /// a tensor that is valid once the step has run.
+    /// a tensor that is valid once the step has run. Tapped tensors are copies.
     public typealias Tap = (String, Tensor) -> Void
 
-    /// One conformer layer over x [T, D] with optional left context for attention (projected K/V of
-    /// previous frames) and for the depthwise conv (previous conv inputs).
-    ///  - kvCache: (k, v) tensors [Tc, D] prepended to this chunk's K/V.
-    ///  - convCache: [K-1, D] rows prepended to the depthwise conv input (causal) — nil means zeros.
-    ///  - ranges: per-query key range over the concatenated [cache ; chunk] keys.
-    func encodeLayer(_ s: Step, _ li: Int, x: Tensor, out: Tensor, ranges: Tensor,
-                     kCache: Tensor?, vCache: Tensor?, convLeft: Tensor?, validFrames: Int,
-                     kOut: Tensor, vOut: Tensor, convIn: Tensor, tap: Tap? = nil) {
+    /// One conformer layer over x [T, D].
+    ///  - keys/values: [Tk, D] buffers whose last T rows receive this chunk's projected K/V; earlier rows
+    ///    hold cached projections of previous frames (the attention left context).
+    ///  - convIn: [left + T + right, D]; rows [left, left+T) receive this chunk's GLU output, the rest must
+    ///    already hold the conv left context (cache or zeros) and right padding (zeros).
+    ///  - ranges: per-query key range over `keys`.
+    func encodeLayer(_ s: Step, _ ws: Workspace, _ li: Int, x: Tensor, out: Tensor, ranges: Tensor,
+                     keys: Tensor, values: Tensor, convIn: Tensor, validFrames: Int, tap: Tap? = nil) {
         let w = layers[li]
         let cfg = config
         let D = cfg.dModel, T = x.shape[0]
-        let tmpD = Tensor(ctx, shape: [T, D])
-        let ffH = Tensor(ctx, shape: [T, cfg.ffDim])
-        let r1 = Tensor(ctx, shape: [T, D])
+        let tmpD = ws.tmpD.rows(0, T), ffH = ws.ffH.rows(0, T)
+        let r1 = ws.r1.rows(0, T), r2 = ws.r2.rows(0, T), r3 = ws.r3.rows(0, T), r4 = ws.r4.rows(0, T)
+        func capture(_ name: String, _ t: Tensor) {
+            guard let tap = tap else { return }
+            let c = Tensor(ctx, shape: t.shape, dtype: t.dtype)
+            s.copy(t, into: c)
+            tap(name, c)
+        }
 
         // FF1 (macaron, x0.5)
         s.layerNorm(x, gamma: w.normFF1W, beta: w.normFF1B, out: tmpD)
         s.gemm(tmpD, w.ff1W1, out: ffH, act: .silu)
         s.gemm(ffH, w.ff1W2, out: r1, outScale: 0.5, residual: x)
-        tap?("ff1", r1)
+        capture("ff1", r1)
 
-        // Self-attention with relative positions. K/V for this chunk land in kOut/vOut, which are
-        // the tail of [cache ; chunk] buffers so attention sees one contiguous key range.
+        // Self-attention with relative positions.
+        let Tk = keys.shape[0]
         s.layerNorm(r1, gamma: w.normAttW, beta: w.normAttB, out: tmpD)
-        let q = Tensor(ctx, shape: [T, D])
+        let q = ws.q.rows(0, T)
         s.gemm(tmpD, w.wq, out: q)
-        s.gemm(tmpD, w.wk, out: kOut)
-        s.gemm(tmpD, w.wv, out: vOut)
-        let keys = kCache ?? kOut, vals = vCache ?? vOut
-        let att = Tensor(ctx, shape: [T, D])
-        s.relPosAttention(q: q, k: keys, v: vals, posTable: posTables[li], relOffset: relOffset,
+        s.gemm(tmpD, w.wk, out: keys.rows(Tk - T, T))
+        s.gemm(tmpD, w.wv, out: values.rows(Tk - T, T))
+        let att = ws.att.rows(0, T)
+        s.relPosAttention(q: q, k: keys, v: values, posTable: posTables[li], relOffset: relOffset,
                           biasU: w.biasU, biasV: w.biasV, ranges: ranges, out: att, heads: cfg.heads)
-        let r2 = Tensor(ctx, shape: [T, D])
         s.gemm(att, w.wo, out: r2, residual: r1)
-        tap?("attn", r2)
+        capture("attn", r2)
 
-        // Convolution module. convIn is [left ; T] rows; this chunk's GLU output goes in its tail.
+        // Convolution module.
         s.layerNorm(r2, gamma: w.normConvW!, beta: w.normConvB!, out: tmpD)
-        let pw = Tensor(ctx, shape: [T, 2 * D])
+        let pw = ws.pw.rows(0, T)
         s.gemm(tmpD, w.pw1, out: pw)
-        let K = cfg.convKernel
-        let left = cfg.causalConv ? K - 1 : (K - 1) / 2
-        let right = cfg.causalConv ? 0 : (K - 1) / 2
-        precondition(convIn.shape[0] == left + T + right)
+        let left = cfg.causalConv ? cfg.convKernel - 1 : (cfg.convKernel - 1) / 2
         let glued = convIn.rows(left, T)
         s.glu(pw, out: glued)
-        if validFrames < T { _ = maskRows(s, glued, validRows: validFrames) }
-        if let cl = convLeft { s.copy(cl, into: convIn.rows(0, left)) }
+        if validFrames < T { maskRows(s, glued, validRows: validFrames) }
         if cfg.convLayerNorm {
-            let dwOut = Tensor(ctx, shape: [T, D])
+            let dwOut = ws.r4.rows(0, T)
             s.dwconv1d(convIn, w: w.dw!, bias: w.dwBias, out: dwOut)
             s.layerNorm(dwOut, gamma: w.convNormW!, beta: w.convNormB!, out: tmpD, act: .silu)
         } else {
             // BatchNorm is folded into the depthwise weights; SiLU is fused into the conv.
             s.dwconv1d(convIn, w: w.dw!, bias: w.dwBias, out: tmpD, act: .silu)
         }
-        let r3 = Tensor(ctx, shape: [T, D])
         s.gemm(tmpD, w.pw2, out: r3, residual: r2)
-        tap?("conv", r3)
+        capture("conv", r3)
 
         // FF2 (x0.5)
         s.layerNorm(r3, gamma: w.normFF2W, beta: w.normFF2B, out: tmpD)
         s.gemm(tmpD, w.ff2W1, out: ffH, act: .silu)
-        let r4 = Tensor(ctx, shape: [T, D])
         s.gemm(ffH, w.ff2W2, out: r4, outScale: 0.5, residual: r3)
-        tap?("ff2", r4)
+        capture("ff2", r4)
 
         s.layerNorm(r4, gamma: w.normOutW, beta: w.normOutB, out: out)
     }
@@ -306,31 +330,129 @@ public final class FastConformerEncoder {
         let cfg = config
         let D = cfg.dModel
         let T = subsampledLength(melFrames)
-        let validT = { var v = validMel; for _ in 0..<3 { v = cfg.causalSubsampling ? (v + 3 - 3) / 2 + 1 : (v + 2 - 3) / 2 + 1 }; return v }()
+        var validT = validMel
+        for _ in 0..<3 { validT = nextLen(validT) }
         preparePositionTables(range: -(T - 1)...(T - 1))
+        let ws = makeWorkspace(maxT: T, maxMel: melFrames)
         let melT = Tensor.from(mel, shape: [melFrames, cfg.melBins], dtype: .f32, ctx)
         let s = Step(ctx)
-        var x = Tensor(ctx, shape: [T, D])
-        encodeSubsampling(s, mel: melT, validMel: validMel, out: x)
-        tap?("pre_encode", x)
-        let ranges = Tensor(ctx, shape: [T, 2], dtype: .i32)
+        func capture(_ name: String, _ t: Tensor) {
+            guard let tap = tap else { return }
+            let c = Tensor(ctx, shape: t.shape, dtype: t.dtype)
+            s.copy(t, into: c)
+            tap(name, c)
+        }
+        var x = ws.x.rows(0, T), y = ws.y.rows(0, T)
+        encodeSubsampling(s, ws, mel: melT, validMel: validMel, out: x)
+        capture("pre_encode", x)
         var rr = FastConformerEncoder.chunkedLimitedRanges(T: T, left: left, right: right)
         for i in 0..<T { rr[2 * i + 1] = min(rr[2 * i + 1], Int32(validT)) }
+        let ranges = ws.ranges.rows(0, T)
         rr.withUnsafeBytes { ranges.contents.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
         let K = cfg.convKernel
-        let convRows = cfg.causalConv ? T + K - 1 : T + K - 1
+        let keys = Tensor(ctx, shape: [T, D]), values = Tensor(ctx, shape: [T, D])
+        let convIn = Tensor(ctx, shape: [T + K - 1, D])
         for li in 0..<cfg.layers {
-            let out = Tensor(ctx, shape: [T, D])
-            let kOut = Tensor(ctx, shape: [T, D]), vOut = Tensor(ctx, shape: [T, D])
-            let convIn = Tensor(ctx, shape: [convRows, D])
-            memset(convIn.contents, 0, convIn.byteCount)
-            encodeLayer(s, li, x: x, out: out, ranges: ranges, kCache: nil, vCache: nil, convLeft: nil,
-                        validFrames: validT, kOut: kOut, vOut: vOut, convIn: convIn,
-                        tap: li == 0 ? { name, t in tap?("layer_00_\(name)", t) } : nil)
-            tap?(String(format: "layer_%02d_out", li), out)
-            x = out
+            s.zero(convIn)
+            encodeLayer(s, ws, li, x: x, out: y, ranges: ranges, keys: keys, values: values, convIn: convIn,
+                        validFrames: validT, tap: li == 0 ? { name, t in tap?("layer_00_\(name)", t) } : nil)
+            capture(String(format: "layer_%02d_out", li), y)
+            swap(&x, &y)
         }
+        let out = Tensor(ctx, shape: [T, D])
+        s.copy(x, into: out)
         s.run()
-        return x
+        return out
+    }
+
+    // MARK: - Cache-aware streaming
+
+    /// Per-stream encoder state for NeMo cache-aware streaming (chunked_limited attention).
+    /// K/V caches hold *projected* keys and values of the last `leftContext` frames per layer (NeMo caches
+    /// the normalized layer inputs and re-projects them every step; projecting once is equivalent).
+    /// Caches ping-pong between two buffers so updates never overlap their source.
+    public final class StreamState {
+        let leftContext: Int
+        let maxChunk: Int
+        var kv: [[Tensor]]        // [layer][2]: [leftContext + maxChunk, D], K and V interleaved as separate arrays
+        var vv: [[Tensor]]
+        var conv: [[Tensor]]      // [layer][2]: [K-1 + maxChunk, D]
+        var parity = 0
+        public internal(set) var cacheLen = 0
+        public internal(set) var step = 0
+
+        init(_ cfg: FastConformerConfig, leftContext: Int, maxChunk: Int, ctx: MetalContext) {
+            self.leftContext = leftContext
+            self.maxChunk = maxChunk
+            let D = cfg.dModel
+            func mk(_ rows: Int) -> Tensor {
+                let t = Tensor(ctx, shape: [rows, D], dtype: .f32)
+                memset(t.contents, 0, t.byteCount)
+                return t
+            }
+            kv = (0..<cfg.layers).map { _ in [mk(leftContext + maxChunk), mk(leftContext + maxChunk)] }
+            vv = (0..<cfg.layers).map { _ in [mk(leftContext + maxChunk), mk(leftContext + maxChunk)] }
+            conv = (0..<cfg.layers).map { _ in [mk(cfg.convKernel - 1 + maxChunk), mk(cfg.convKernel - 1 + maxChunk)] }
+        }
+    }
+
+    public func makeStreamState(leftContext: Int, maxChunk: Int) -> StreamState {
+        precondition(config.causalConv, "cache-aware streaming needs causal convolutions")
+        preparePositionTables(range: -(maxChunk - 1)...(leftContext + maxChunk - 1))
+        return StreamState(config, leftContext: leftContext, maxChunk: maxChunk, ctx: ctx)
+    }
+
+    /// Encodes one cache-aware streaming step into `s`:
+    /// melChunk [Tin, melBins] (already including NeMo's pre-encode cache frames), `validMel` valid rows,
+    /// `drop` subsampled frames removed from the front (NeMo drop_extra_pre_encoded).
+    /// Writes the encoder output rows to `out` ([T, D], T = subsampled - drop) and returns (T, validT).
+    func encodeStreamStep(_ s: Step, _ ws: Workspace, state st: StreamState, melChunk: Tensor, validMel: Int, drop: Int,
+                          out: Tensor) -> (T: Int, valid: Int) {
+        let cfg = config
+        let D = cfg.dModel, K = cfg.convKernel, L = st.leftContext
+        let Tsub = subsampledLength(melChunk.shape[0])
+        var validSub = validMel
+        for _ in 0..<3 { validSub = nextLen(validSub) }
+        let T = Tsub - drop
+        let validT = max(0, min(validSub - drop, T))
+        precondition(T <= st.maxChunk && T <= ws.maxT, "chunk of \(T) frames exceeds workspace")
+
+        let subOut = ws.y.rows(0, Tsub)
+        encodeSubsampling(s, ws, mel: melChunk, validMel: validMel, out: subOut)
+        var x = ws.x.rows(0, T)
+        s.copy(subOut.rows(drop, T), into: x)
+        var y = ws.y.rows(0, T)
+
+        // Keys: [L cached ; T new]. Valid cached keys are the last cacheLen of the L rows.
+        var rr = [Int32]()
+        for _ in 0..<T { rr += [Int32(L - st.cacheLen), Int32(L + validT)] }
+        let ranges = ws.ranges.rows(0, T)
+        rr.withUnsafeBytes { ranges.contents.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
+
+        let p = st.parity, np = 1 - p
+        for li in 0..<cfg.layers {
+            let keys = st.kv[li][p].rows(0, L + T), values = st.vv[li][p].rows(0, L + T)
+            let convIn = st.conv[li][p].rows(0, K - 1 + T)
+            encodeLayer(s, ws, li, x: x, out: y, ranges: ranges, keys: keys, values: values, convIn: convIn, validFrames: validT)
+            // Next caches: the last L keys/values and the last K-1 conv inputs.
+            s.copy(keys.rows(T, L), into: st.kv[li][np].rows(0, L))
+            s.copy(values.rows(T, L), into: st.vv[li][np].rows(0, L))
+            s.copy(convIn.rows(T, K - 1), into: st.conv[li][np].rows(0, K - 1))
+            swap(&x, &y)
+        }
+        s.copy(x, into: out.rows(0, T))
+        st.parity = np
+        st.cacheLen = min(st.cacheLen + T, L)
+        st.step += 1
+        return (T, validT)
+    }
+}
+
+extension Tensor {
+    /// A view of the first elements of this tensor reshaped to `shape`.
+    func prefix(_ shape: [Int]) -> Tensor {
+        let n = shape.reduce(1, *)
+        precondition(n <= count, "prefix \(shape) exceeds \(self.shape)")
+        return Tensor(buffer: buffer, offset: offset, shape: shape, dtype: dtype)
     }
 }
