@@ -57,6 +57,10 @@ guard let command = args.first else {
 
 do {
     switch command {
+    case "libtime":
+        let t0 = Date()
+        _ = try MetalContext()
+        print(String(format: "Metal library load/compile: %.0f ms", Date().timeIntervalSince(t0) * 1000))
     case "peaks":
         let ctx = MetalContext.shared
         print("device: \(ctx.device.name)  maxBufferLength: \(ctx.device.maxBufferLength / (1 << 20)) MB  recommendedMaxWorkingSet: \(ctx.device.recommendedMaxWorkingSetSize / (1 << 20)) MB")

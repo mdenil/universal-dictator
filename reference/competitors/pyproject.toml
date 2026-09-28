@@ -1,0 +1,9 @@
+[project]
+name = "dictator-competitors"
+version = "0.1.0"
+description = "Pinned competitor runtimes for head-to-head comparisons (sherpa-onnx). Not shipped."
+requires-python = "==3.12.*"
+dependencies = ["sherpa-onnx==1.13.8", "sherpa-onnx-core==1.13.8", "soundfile", "numpy"]
+
+[tool.uv]
+package = false
