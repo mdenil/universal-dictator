@@ -26,6 +26,8 @@ These are the first measurements, taken while downloads were running, so they ar
 | K5 | int8 GEMV: rows interleaved (all row loads issued first) and each lane's activation slice read from threadgroup memory once per K chunk, reused across rows | Voxtral encoder shapes (M=4, int8), two interleaved pairs: 1.5–2.5x (e.g. enc down 0.325 → 0.168 ms, 0.455 → 0.179 ms) (*noisy*: reference jobs on MPS) | QuantTests pass |
 | K6 | Voxtral: multi-query attention for the 4-frame encoder step (each K/V row read once per head) | ≈5% encoder GPU, won 2/2 interleaved pairs (*noisy*) | matches per-query kernel to 1e-5 |
 | K7 | Voxtral silent-prefix snapshot: prefill computes 8 positions instead of 39 | warm prefill 1.3–1.9 s → 0.74–0.93 s (*noisy*) | token stream identical |
+| K8 | Voxtral fp16 K/V caches (halves attention bytes and decoder KV memory 1.85 → 0.93 GB); kill-switch `DICTATOR_KV_F32=1` | not timed separately | token stream identical on clip |
+| K9 | Split-K multi-query attention (4 key partitions per head + combine); `DICTATOR_ATTN_SPLITS=1` disables | encoder attention section −12% / −26% on 2 interleaved pairs (*noisy*, GPU saturated) | matches per-query kernel to 1e-5 |
 | K2 | fp16 encoder weights (D1) | Nemotron 160 ms chunk: 37.7 → 25.7 ms GPU (*noisy*) | tokens exact on 20/20 dev20, 9/9 streaming |
 
 ## Rejected

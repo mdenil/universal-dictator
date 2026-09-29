@@ -128,6 +128,9 @@ extension Step {
     }
 }
 
+/// Key-range splits for multi-query attention (DICTATOR_ATTN_SPLITS, default 4; 1 disables).
+let attentionSplits = Int(ProcessInfo.processInfo.environment["DICTATOR_ATTN_SPLITS"] ?? "4") ?? 4
+
 /// Kill-switch for the multi-query attention kernel (DICTATOR_ATTN_MQ=0).
 let attentionMQEnabled = ProcessInfo.processInfo.environment["DICTATOR_ATTN_MQ"] != "0"
 
@@ -161,6 +164,21 @@ extension Step {
     public func attention(q: Tensor, k: Tensor, v: Tensor, ranges: Tensor, out: Tensor, heads Hq: Int, kvHeads Hkv: Int, headDim d: Int) {
         let Tq = q.count / (Hq * d), Tk = k.count / (Hkv * d)
         // Few queries: one threadgroup per head reads each K/V row once for all queries.
+        let splits = attentionSplits
+        if Tq > 1 && Tq <= 8 && d <= 128 && attentionMQEnabled && splits > 1 && Tk >= 256 {
+            let params = AttnParams(Tq: Int32(Tq), Tk: Int32(Tk), Hq: Int32(Hq), Hkv: Int32(Hkv), d: Int32(d), ldq: Int32(Hq * d),
+                                    ldk: Int32(Hkv * d), ldo: Int32(Hq * d), scale: 1 / Float(d).squareRoot())
+            let part = Tensor(ctx, shape: [Hq * splits * Tq * (d + 2)])
+            let p = try! ctx.pipeline(k.dtype == .f16 ? "attention_mq_split_f16" : "attention_mq_split_f32")
+            bind(q, 0); bind(k, 1); bind(v, 2); bind(ranges, 3); bind(part, 4)
+            setBytes(params, 5); setBytes(Int32(splits), 6)
+            dispatch(p, threadgroups: MTLSize(width: Hq, height: splits, depth: 1), threads: MTLSize(width: 128, height: 1, depth: 1))
+            let c = try! ctx.pipeline("attention_combine")
+            bind(part, 0); bind(out, 1); setBytes(params, 2); setBytes(Int32(splits), 3)
+            enc.setComputePipelineState(c)
+            enc.dispatchThreads(MTLSize(width: d, height: Tq, depth: Hq), threadsPerThreadgroup: MTLSize(width: d, height: 1, depth: 1))
+            return
+        }
         if Tq > 1 && Tq <= 8 && d <= 128 && attentionMQEnabled {
             let p = try! ctx.pipeline(k.dtype == .f16 ? "attention_mq_f16" : "attention_mq_f32")
             bind(q, 0); bind(k, 1); bind(v, 2); bind(ranges, 3); bind(out, 4)

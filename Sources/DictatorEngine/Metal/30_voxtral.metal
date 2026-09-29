@@ -234,3 +234,108 @@ kernel void attention_mq(device const float* Q [[buffer(0)]], device const TK* K
 }
 template [[host_name("attention_mq_f32")]] kernel void attention_mq<float>(device const float*, device const float*, device const float*, device const int2*, device float*, constant AttnParams&, uint, uint);
 template [[host_name("attention_mq_f16")]] kernel void attention_mq<half>(device const float*, device const half*, device const half*, device const int2*, device float*, constant AttnParams&, uint, uint);
+
+// ---------------------------------------------------------------- split-K multi-query attention
+// Same as attention_mq, but each head's key range is split into p.splits partitions handled by
+// separate threadgroups (more parallelism for 32-head / few-query steps). Each writes partial
+// (max, sum, unnormalized output) to `part`; attention_combine merges them.
+struct SplitParams { int splits; };
+
+template <typename TK>
+kernel void attention_mq_split(device const float* Q [[buffer(0)]], device const TK* K [[buffer(1)]],
+                               device const TK* V [[buffer(2)]], device const int2* ranges [[buffer(3)]],
+                               device float* part [[buffer(4)]], constant AttnParams& p [[buffer(5)]],
+                               constant SplitParams& sp [[buffer(6)]],
+                               uint2 tg2 [[threadgroup_position_in_grid]],
+                               uint tid [[thread_index_in_threadgroup]]) {
+    threadgroup float qs[MQ_MAX_Q * 128];
+    threadgroup float sc[MQ_MAX_Q * MQ_BLOCK];
+    threadgroup float mrow[MQ_MAX_Q], lrow[MQ_MAX_Q], corr[MQ_MAX_Q];
+    const int nt = 128;
+    const int h = tg2.x, split = tg2.y;
+    const int Tq = p.Tq, d = p.d;
+    const int kvh = h / (p.Hq / p.Hkv);
+    for (int i = tid; i < Tq * d; i += nt) {
+        int q = i / d, e = i - q * d;
+        qs[q * d + e] = Q[(long)q * p.ldq + h * d + e];
+    }
+    if (int(tid) < Tq) { mrow[tid] = -INFINITY; lrow[tid] = 0; }
+    int lo = p.Tk, hi = 0;
+    for (int q = 0; q < Tq; q++) { lo = min(lo, max(ranges[q].x, 0)); hi = max(hi, min(ranges[q].y, p.Tk)); }
+    const int per = (hi - lo + sp.splits - 1) / sp.splits;
+    const int slo = lo + split * per, shi = min(hi, slo + per);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    const int e = int(tid) % d, qstep = nt / d, q0 = int(tid) / d;
+    float acc[MQ_MAX_Q];
+    for (int q = 0; q < MQ_MAX_Q; q++) acc[q] = 0;
+    for (int b0 = slo; b0 < shi; b0 += MQ_BLOCK) {
+        int bn = min(MQ_BLOCK, shi - b0);
+        for (int j = tid; j < bn; j += nt) {
+            device const TK* kr = K + (long)(b0 + j) * p.ldk + kvh * d;
+            float s[MQ_MAX_Q];
+            for (int q = 0; q < Tq; q++) s[q] = 0;
+            for (int x = 0; x < d; x += 4) {
+                float4 kv = float4(kr[x], kr[x + 1], kr[x + 2], kr[x + 3]);
+                for (int q = 0; q < Tq; q++) s[q] += dot(float4(qs[q * d + x], qs[q * d + x + 1], qs[q * d + x + 2], qs[q * d + x + 3]), kv);
+            }
+            for (int q = 0; q < Tq; q++) {
+                int kj = b0 + j;
+                bool ok = kj >= ranges[q].x && kj < ranges[q].y;
+                sc[q * MQ_BLOCK + j] = ok ? s[q] * p.scale : -INFINITY;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (int q = int(tid) / 32; q < Tq; q += nt / 32) {
+            float bm = -INFINITY;
+            for (int j = int(tid) % 32; j < bn; j += 32) bm = max(bm, sc[q * MQ_BLOCK + j]);
+            bm = simd_max(bm);
+            float nm = max(mrow[q], bm);
+            float bs = 0;
+            for (int j = int(tid) % 32; j < bn; j += 32) {
+                float v = sc[q * MQ_BLOCK + j];
+                float ex = (v == -INFINITY) ? 0.0f : exp(v - nm);
+                sc[q * MQ_BLOCK + j] = ex;
+                bs += ex;
+            }
+            bs = simd_sum(bs);
+            if (int(tid) % 32 == 0) {
+                float c = mrow[q] == -INFINITY ? 0.0f : exp(mrow[q] - nm);
+                corr[q] = c; lrow[q] = lrow[q] * c + bs; mrow[q] = nm;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        for (int q = q0, qi = 0; q < Tq; q += qstep, qi++) acc[qi] *= corr[q];
+        for (int j = 0; j < bn; j++) {
+            float v = float(V[(long)(b0 + j) * p.ldk + kvh * d + e]);
+            for (int q = q0, qi = 0; q < Tq; q += qstep, qi++) acc[qi] += sc[q * MQ_BLOCK + j] * v;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+    // Partial layout per (head, split): [Tq] max, [Tq] sum, [Tq, d] unnormalized output.
+    device float* pp = part + (long)(h * sp.splits + split) * (Tq * (d + 2));
+    if (int(tid) < Tq) { pp[tid] = mrow[tid]; pp[Tq + tid] = lrow[tid]; }
+    for (int q = q0, qi = 0; q < Tq; q += qstep, qi++) pp[2 * Tq + q * d + e] = acc[qi];
+}
+template [[host_name("attention_mq_split_f32")]] kernel void attention_mq_split<float>(device const float*, device const float*, device const float*, device const int2*, device float*, constant AttnParams&, constant SplitParams&, uint2, uint);
+template [[host_name("attention_mq_split_f16")]] kernel void attention_mq_split<half>(device const float*, device const half*, device const half*, device const int2*, device float*, constant AttnParams&, constant SplitParams&, uint2, uint);
+
+kernel void attention_combine(device const float* part [[buffer(0)]], device float* out [[buffer(1)]],
+                              constant AttnParams& p [[buffer(2)]], constant SplitParams& sp [[buffer(3)]],
+                              uint3 g [[thread_position_in_grid]]) {
+    int e = g.x, q = g.y, h = g.z;
+    if (e >= p.d || q >= p.Tq || h >= p.Hq) return;
+    const int Tq = p.Tq, d = p.d, stride = Tq * (d + 2);
+    float M = -INFINITY;
+    for (int s = 0; s < sp.splits; s++) M = max(M, part[(long)(h * sp.splits + s) * stride + q]);
+    float num = 0, den = 0;
+    for (int s = 0; s < sp.splits; s++) {
+        device const float* pp = part + (long)(h * sp.splits + s) * stride;
+        float m = pp[q];
+        if (m == -INFINITY) continue;
+        float w = exp(m - M);
+        den += pp[Tq + q] * w;
+        num += pp[2 * Tq + q * d + e] * w;
+    }
+    out[(long)q * p.ldo + h * d + e] = den > 0 ? num / den : 0.0f;
+}
