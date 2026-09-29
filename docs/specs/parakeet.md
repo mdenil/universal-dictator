@@ -166,3 +166,27 @@ Tokens: identical on 20/20 utterances. The argmax of the first 20 joint steps wa
 **Spec re-implementation vs reference** (`check_spec.py`, 3 utterances): the normalized mel matches to 2.4e-6 max-abs (the per-bin mean/std reduction order differs). pre_encode, enc_in (×32), pos_emb and att_mask are bit-identical. Layer outputs match to ≤ 3.1e-5 max-abs (≤ 3.7e-7 relative), and tokens are identical.
 
 **Offline-with-mask vs official buffered streaming** (different algorithms, §5): 8/20 dev transcripts are identical. The rest differ mostly in punctuation, casing and spelling variants ("Grey"/"Gray"). Normalized WER on dev20 is 4.11% offline_70_2_5 vs 5.90% buffered. The buffered dev20 golden (`data/golden/parakeet/stream_70_2_5/`) was produced on **MPS fp32** with `batch_size=1`. On this machine's CPU the buffered pipeline ran at about 1/20 of real time. The same run at `batch_size=20` on MPS gave identical transcripts on 20/20 utterances.
+
+## 11. Reference WER (measured)
+
+Setup:
+- **Pipeline:** the official buffered script (`buf_infer.py` @ `c42e444`, run through `reference/nemo/run_official.py` with the encoder shim), with `left_context_secs=5.6 chunk_secs=0.16 right_context_secs=0.40 att_context_size_as_chunk=true`.
+- **Hardware and batching:** MPS in fp32, `batch_size=32`.
+- **Scoring:** Whisper `EnglishTextNormalizer` (whisper_normalizer 0.1.15) and jiwer corpus WER.
+- **Why a subset:** the pipeline re-encodes 6.16 s every 160 ms and ran at **1.1× real time on MPS** (0.5× at batch 20 on dev20, and about 1/20 of real time on CPU). A full set would take about 5 h. So a **fixed random subset of 200 utterances per set** was used (`random.Random(0).sample`, `wer.py --limit 200`).
+
+| Set (200 utts) | Audio | Our WER @ 560 ms | Card @ 1.12 s | Card offline | S / D / I | Ref words |
+|---|---|---|---|---|---|---|
+| test-clean | 0.40 h | **1.81%** | 1.78% | 1.63% | 52 / 7 / 10 | 3821 |
+| test-other | 0.35 h | **4.04%** | 3.54% | 3.11% | 106 / 17 / 20 | 3541 |
+
+**The card publishes no per-dataset LibriSpeech numbers at 560 ms.** It gives only the 8-set leaderboard average: 6.52% at 0.56 s vs 6.29% at 1.12 s and 5.91% offline. So there is no direct target to match. Our 560 ms numbers sit where expected, at or slightly above the 1.12 s card values. test-other is +0.5 abs over the 1.12 s value, which is larger than the average degradation (+0.23) but within about 1.5× the subset's sampling error (≈0.33 per-word binomial SE on 3541 words). This does **not** confirm a published figure. A full-set run, or a card number at 560 ms, would be needed for that.
+
+Commands:
+
+```
+scripts/heavy.sh reference/nemo/.venv/bin/python reference/nemo/wer.py --model parakeet --config 70_2_5 --set test-clean --limit 200 --device mps
+scripts/heavy.sh reference/nemo/.venv/bin/python reference/nemo/wer.py --model parakeet --config 70_2_5 --set test-other --limit 200 --device mps
+```
+
+Outputs: `data/wer/parakeet_70_2_5_mps/<set>_subset200/{manifest.nemo.jsonl, official_output.jsonl, result.json}`. Dev20 (same pipeline, batch 20): 5.90%.
