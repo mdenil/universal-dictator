@@ -540,7 +540,9 @@ public final class VoxtralSession {
 public final class VoxtralLive: StreamingTranscriber {
     public let session: VoxtralSession
     var padded: [Float]
+    var paddedBase = 0               // absolute sample index of padded[0] (older samples are dropped)
     var mel: [Float] = []
+    var melBase = 0                  // absolute frame index of mel's first row
     var melFrames = 0
     var position = 0                 // next decoder position to run
     var realSamples = 0
@@ -571,28 +573,46 @@ public final class VoxtralLive: StreamingTranscriber {
 
     func run() {
         // Frame t needs padded samples [160t - 200, 160t + 200).
-        let ready = padded.count >= 200 ? (padded.count - 200) / 160 + 1 : 0
+        let total = paddedBase + padded.count
+        let ready = total >= 200 ? (total - 200) / 160 + 1 : 0
         if ready > melFrames {
-            mel += session.model.frontend.frames(padded, from: melFrames, count: ready - melFrames)
+            mel += session.model.frontend.frames(padded, from: melFrames - paddedBase / 160, count: ready - melFrames)
             melFrames = ready
         }
+        defer { trim() }
         let promptLen = session.model.prompt.count
         while !stopped {
             let t0 = DispatchTime.now().uptimeNanoseconds
             let tok: Int
             if position == 0 {
                 guard melFrames >= 8 * promptLen else { return }
-                tok = session.prefill(mel: Array(mel[0..<(8 * promptLen * 128)]))
+                tok = session.prefill(mel: Array(mel[0..<(8 * promptLen * 128)]))     // melBase is 0 until prefill
                 position = promptLen
             } else {
                 guard melFrames >= 8 * (position + 1) else { return }
-                tok = session.step(mel: Array(mel[(8 * position * 128)..<(8 * (position + 1) * 128)]))
+                let r = 8 * (position - melBase / 8) * 128
+                tok = session.step(mel: Array(mel[r..<(r + 8 * 128)]))
                 position += 1
             }
             let dt = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9
             stepWallTimes.append(dt)
             emissions.append(Emission(token: tok, samplesSeen: realSamples, computeSeconds: dt))
             if tok == session.model.eos { stopped = true }
+        }
+    }
+
+    /// Drops consumed input so a long session keeps bounded memory: mel rows before the next decoder
+    /// position, and audio up to two frames before the next mel frame (frames past the stream start
+    /// never reflect-pad, so their windows are unaffected).
+    func trim() {
+        if position > 0 && 8 * position > melBase {
+            mel.removeFirst((8 * position - melBase) * 128)
+            melBase = 8 * position
+        }
+        let keepFrom = max(0, 160 * (melFrames - 2))
+        if keepFrom > paddedBase {
+            padded.removeFirst(keepFrom - paddedBase)
+            paddedBase = keepFrom
         }
     }
 }
