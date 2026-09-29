@@ -84,6 +84,7 @@ public final class NemotronStream {
     var liveBufferStart = 0
     var liveNextFrame = 0
     var liveSamples = 0
+    public var endPadding = ProcessInfo.processInfo.environment["DICTATOR_END_PAD"] != "0"
     var liveEmissions: [Emission] = []
 
     /// Receives the kept encoder output rows of each chunk (parity testing).
@@ -172,9 +173,14 @@ extension NemotronStream {
     }
 
     /// Ends the stream (flushes the final partial chunk); returns the tokens it emitted.
+    /// With `endPadding` (default; DICTATOR_END_PAD=0 disables) a final tail shorter than 8 mel frames is
+    /// zero-extended with the extra rows masked as invalid (as NeMo's batched mode does through lengths)
+    /// instead of being dropped. NeMo's batch-1 streaming drops it, losing the last word on ~2-3% of
+    /// utterances at 160 ms (see D4).
     public func flush() -> [Int] {
+        let out = [Int]()
         liveBuffer += liveMel.finish()
-        return drainChunks(final: true)
+        return out + drainChunks(final: true)
     }
 
     func drainChunks(final: Bool) -> [Int] {
@@ -189,16 +195,24 @@ extension NemotronStream {
             if end > have && !final { break }
             let chunkEnd = min(end, have)
             let chunkLen = chunkEnd - idx
-            if chunkLen <= 0 || chunkLen < (first ? 1 : 8) { break }
+            let minLen = first ? 1 : 8
+            if chunkLen <= 0 || (chunkLen < minLen && !(final && endPadding)) { break }
             let cacheStart = first ? idx : max(0, idx - schedule.preEncodeCache)
             let rows = chunkEnd - cacheStart
+            let padRows = max(0, minLen - chunkLen)          // only for a short final tail
             let isLast = final && end >= have
             let a = (cacheStart - liveBufferStart) * bins
             let t0 = DispatchTime.now().uptimeNanoseconds
             var toks = [Int]()
-            liveBuffer.withUnsafeBufferPointer { m in
-                let slice = UnsafeBufferPointer(rebasing: m[a..<(a + rows * bins)])
-                toks = step(melRows: slice, nRows: rows, validRows: rows, keepAll: isLast)
+            if padRows > 0 {
+                var m = Array(liveBuffer[a..<(a + rows * bins)])
+                m += [Float](repeating: 0, count: padRows * bins)
+                m.withUnsafeBufferPointer { toks = step(melRows: $0, nRows: rows + padRows, validRows: rows, keepAll: true) }
+            } else {
+                liveBuffer.withUnsafeBufferPointer { m in
+                    let slice = UnsafeBufferPointer(rebasing: m[a..<(a + rows * bins)])
+                    toks = step(melRows: slice, nRows: rows, validRows: rows, keepAll: isLast)
+                }
             }
             let dt = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9
             liveEmissions += toks.map { Emission(token: $0, samplesSeen: liveSamples, computeSeconds: dt) }

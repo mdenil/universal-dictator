@@ -30,6 +30,7 @@ final class StreamingEquivalenceTests: XCTestCase {
             let a = NemotronStream(model: model, lookahead: lookahead)
             a.runBuffered(mel: model.frontend.features(audio), frames: audio.count / 160 + 1, validFrames: audio.count / 160 + 1)
             let b = NemotronStream(model: model, lookahead: lookahead)
+            b.endPadding = false   // exact replay of NeMo's batch-1 schedule
             var i = 0
             while i < audio.count { let n = min(1600, audio.count - i); _ = b.push(samples: Array(audio[i..<(i + n)])); i += n }
             _ = b.flush()

@@ -36,3 +36,11 @@ This file lists every accepted difference between our engine and the reference i
 
   q8 is WER-identical to bf16 on both sets. q4ffn adds +0.12 points on test-other.
 - **Review:** M6 picks the shipping precision from WER against speed.
+
+## D4: Nemotron end of stream, masked tail instead of a dropped tail
+
+- **What:** NeMo's batch-1 cache-aware streaming (`CacheAwareStreamingAudioBuffer`) skips a final chunk shorter than 8 mel frames. At 160 ms this loses the last word, or at least the final period, on some utterances. Batched NeMo runs do not have this problem, because short utterances are padded and masked through their lengths. That explains our +0.15 (test-clean) and +0.25 (test-other) WER gap against the reference's batch-32 WER runs: 8 of our 19 test-clean differences, and 13 of 27 on test-other, are exactly a missing final word.
+- **Change:** in live streaming, a short final tail is zero-extended to 8 frames with the extra rows masked as invalid, the way batched NeMo handles it. Appending real silence instead was tried and rejected: it made the model drop the final period.
+- **How to select it:** on by default. `DICTATOR_END_PAD=0` or `NemotronStream.endPadding = false` gives the exact batch-1 NeMo schedule, which the equivalence tests use.
+- **Measured:** on 40 utterances from the reference test-clean subset, WER is unchanged and 7 transcripts regain their final period. The rerun on the full 500-utterance reference subsets is pending.
+- **Review:** at M6.
