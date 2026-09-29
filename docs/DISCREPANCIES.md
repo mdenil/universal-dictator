@@ -34,8 +34,13 @@ This file lists every accepted difference between our engine and the reference i
   | q8 | 0.85% | 4.47% |
   | q4ffn | 0.85% | 4.59% |
 
+  | q8h | 0.85% | 4.47% |
+
   q8 is WER-identical to bf16 on both sets. q4ffn adds +0.12 points on test-other.
-- **Review:** M6 picks the shipping precision from WER against speed.
+- **`dictator-q8h.safetensors`:** q8 plus the int8 output head (`--quant dec-ffn,dec-attn,enc,adapter,head`). Its test-clean transcripts are identical to q8's on all 100 utterances.
+- **Against the reference on its own utterances** (transformers bf16 on MPS, `reference/voxtral/wer.py`, 100 per set): q8h scores 1.67% / 5.28% against the reference's 1.72% / 5.28%.
+- **Speed (quiet, 2026-09-29):** q4ffn is no faster than q8 (q4 GEMV is unpacking-bound at about 45 GB/s, while int8 runs at 85–90 GB/s). q8h is the fastest quantized file (PERF_LOG step times), so **q8h is the shipping precision** and q4ffn has no remaining use.
+- **Review:** decided at M6 (q8h).
 
 ## D4: Nemotron end of stream, masked tail instead of a dropped tail
 

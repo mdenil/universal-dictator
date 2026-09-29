@@ -1,0 +1,178 @@
+<title>Dictator Model Evaluation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column (~68ch) for prose; tables and charts widen to 960px. A lab notebook, not a dashboard. */
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --ink: #17202a; --muted: #5a6573; --rule: #d9dee5; --accent: #1d6a86;
+  --good: #2c7a4b; --warn: #a2620e; --bad: #b3372f;
+  --nem: #1f8a66; --nem2: #79c2a4; --par: #c1761a; --par2: #e3ad5a; --vox: #6a4fc6;
+  --display: "Newsreader", "Iowan Old Style", Georgia, serif;
+  --body: "IBM Plex Sans", -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f141a; --surface: #161d25; --ink: #e5eaf0; --muted: #95a1ae; --rule: #2a3441; --accent: #5fb4d0;
+  --good: #5cc48a; --warn: #e3a64a; --bad: #ec7a70;
+  --nem: #45c294; --nem2: #93d9bc; --par: #e9a33c; --par2: #f3cb8c; --vox: #a08bf2; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0f141a; --surface: #161d25; --ink: #e5eaf0; --muted: #95a1ae; --rule: #2a3441; --accent: #5fb4d0;
+  --good: #5cc48a; --warn: #e3a64a; --bad: #ec7a70;
+  --nem: #45c294; --nem2: #93d9bc; --par: #e9a33c; --par2: #f3cb8c; --vox: #a08bf2; color-scheme: dark }
+body { background: var(--bg); color: var(--ink); font: 400 16px/1.6 var(--body); }
+.wrap { max-width: 960px; margin: 0 auto; padding-inline: 20px; padding-block: 40px 72px; display: grid; gap: 40px; }
+.prose { max-width: 68ch; }
+header { display: grid; gap: 10px; }
+.eyebrow { font: 500 12px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h1 { font: 600 clamp(30px, 5vw, 44px)/1.1 var(--display); margin: 0; text-wrap: balance; }
+h2 { font: 600 26px/1.2 var(--display); margin: 0 0 12px; text-wrap: balance; }
+h3 { font: 600 16px/1.3 var(--body); margin: 20px 0 6px; }
+p { margin: 0 0 12px; }
+.lede { font-size: 18px; color: var(--ink); }
+.meta { color: var(--muted); font-size: 14px; }
+section { display: grid; gap: 14px; min-width: 0; }
+.verdict { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 20px 22px; display: grid; gap: 14px; }
+.picks { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.pick { display: grid; gap: 4px; align-content: start; padding-top: 10px; border-top: 3px solid var(--c); }
+.pick .role { font: 500 12px/1.4 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.pick .name { font: 600 20px/1.25 var(--display); }
+.pick p { font-size: 14.5px; color: var(--muted); margin: 0; }
+.tw { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+th { font: 500 12px/1.3 var(--body); color: var(--muted); letter-spacing: .02em; background: var(--bg); }
+tbody tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 8px; vertical-align: 0; }
+.chart { width: 100%; height: auto; display: block; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; }
+.chart .grid { stroke: var(--rule); stroke-width: 1; }
+.chart .tick { fill: var(--muted); font: 11px var(--mono); }
+.chart .axis { fill: var(--muted); font: 12px var(--body); }
+.chart .lbl { fill: var(--ink); font: 500 12.5px var(--body); }
+.chart .span { stroke-width: 2.5; opacity: .55; }
+.chart .hollow { fill: var(--surface); stroke-width: 2; }
+.chart .budget { stroke: var(--bad); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.chart .p99 { stroke: var(--ink); stroke-width: 2; }
+.chart .line { fill: none; stroke-width: 2.5; }
+.cap { font-size: 13.5px; color: var(--muted); max-width: 80ch; }
+ul { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+code { font: 13.5px var(--mono); background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 0 4px; }
+.status { font: 500 12px/1 var(--mono); padding: 3px 7px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.status.ok { color: var(--good); } .status.no { color: var(--bad); } .status.open { color: var(--warn); }
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px 28px; }
+.notes > div { min-width: 0; }
+.notes h3 { margin-top: 0; }
+.notes p { font-size: 14.5px; }
+q { font-style: italic; quotes: "“" "”"; }
+</style>
+
+<div class="wrap">
+<header>
+  <div class="eyebrow">Universal Dictator · M6 evaluation · Apple M3, 24 GB · 29 September 2026</div>
+  <h1>Which streaming model should the dictation app ship?</h1>
+  <p class="lede prose">We ported three streaming speech-to-text models to Swift and Metal and measured them head to head on this MacBook: accuracy on read, meeting and earnings-call speech, how soon each word appears, and whether each keeps up in real time.</p>
+</header>
+
+<section class="verdict">
+  <h2>Recommendation</h2>
+  <div class="picks">
+    <div class="pick" style="--c: var(--nem)">
+      <span class="role">Default</span>
+      <span class="name">Nemotron, 160 ms</span>
+      <p>Words appear about 0.27 s after they are spoken and are final by about 0.55 s. It uses 13% of its real-time budget and 0.2 GB of working memory. It matches NeMo's own accuracy.</p>
+    </div>
+    <div class="pick" style="--c: var(--par)">
+      <span class="role">Accuracy setting</span>
+      <span class="name">Parakeet, frozen-prefix h4</span>
+      <p>The most accurate model that keeps up: 25% fewer errors than Nemotron 160 ms on noisy read speech and 17% fewer on meetings, at the cost of about 0.35 s more delay per word.</p>
+    </div>
+    <div class="pick" style="--c: var(--vox)">
+      <span class="role">Not yet</span>
+      <span class="name">Voxtral Mini 4B</span>
+      <p>The best on clean read speech and earnings calls, but on streams longer than about 10 s it doesn't keep up with real time, words appear about 0.7 s late, and it needs about 7.8 GB. Revisit after the speed work.</p>
+    </div>
+  </div>
+  <p class="meta">These picks cover everything except your own dictation recordings, which haven't been recorded yet. The plan treats that set as the one that matters most, so treat these picks as provisional until it's scored.</p>
+</section>
+
+<section>
+  <h2>Accuracy</h2>
+  <p class="prose">Word error rate (WER) after text normalization, which ignores case and punctuation. LibriSpeech columns use the first 100 utterances of each set; AMI (meeting headsets) and Earnings-22 (accented earnings calls) use 150 utterances each, spread across one shard of the ESB test sets. Every configuration is scored on the same utterances. The last column also counts case and punctuation, which matters for dictation.</p>
+  <!--accuracy-->
+  <h3>The bad tail</h3>
+  <p class="prose">The mean hides the utterances a user would notice. This table shows the per-utterance WER that the worst 10% of utterances reach or exceed, and how often a model returned nothing at all. AMI's clips are short (about 3 s), and many are single backchannels such as <q>Yeah.</q> or <q>'Kay.</q>, so empty outputs there mostly mean a dropped backchannel.</p>
+  <!--tail-->
+  <h3>Against the reference implementations</h3>
+  <p class="prose">Each port is compared with its reference on the reference's own utterances. Nemotron and Parakeet match NeMo to within 0.05 points. Nemotron 160 ms reached that only after the end-of-stream fix (D4), which recovers the final word of utterances whose last audio chunk is short.</p>
+  <!--reference-->
+  <h3>Other variants, first 100 utterances</h3>
+  <p class="prose">sherpa-onnx runs the same Nemotron 160 ms checkpoint through ONNX Runtime on the CPU. Voxtral's 8-bit weights (q8, and q8h with an 8-bit output head) score the same as 16-bit, and q8h's test-clean transcripts are identical to q8's. The 4-bit feed-forward variant (q4ffn) loses 0.12 points on test-other and is no faster, because unpacking 4-bit weights costs more arithmetic than the memory it saves.</p>
+  <!--variants-->
+</section>
+
+<section>
+  <h2>Latency</h2>
+  <p class="prose">For every correctly recognised word, we measure from the end of that word in the audio (from forced alignment) to the moment it appears in the live transcript (<em>first shown</em>) and the moment it reaches its final form (<em>final</em>). A word counts as final once the next word has started, since a longer subword could still extend it before then. All times are algorithmic: they assume each step's compute is instantaneous, which the speed section shows is small next to these numbers for every model except Voxtral. Scored on LibriSpeech test-other, first 100 utterances.</p>
+  <!--pareto-->
+  <p class="cap">Lower and further left is better. Each line runs from the median time a word is first shown to the median time it is final.</p>
+  <!--latency-->
+  <p class="prose">None of the three decoders ever changes text it has already shown: partial words only grow and complete words never change (0 rewrites). The app can therefore draw text as it arrives, without flicker. At the same 560 ms setting, Parakeet shows words about 0.2 s later than Nemotron does; we have not yet pinned down why.</p>
+</section>
+
+<section>
+  <h2>Speed and resources</h2>
+  <p class="prose">Quiet machine, one 33.9 s utterance, three runs after a warm-up. A step is the work done for each new piece of audio; to keep up in real time, a step has to finish before the next piece arrives. The dashed line is that budget.</p>
+  <!--load-->
+  <p class="cap">Bars show the median step as a share of its budget; the black tick marks the 99th percentile. Voxtral takes an 80 ms step every 80 ms of audio, while the other models take a 160 ms step.</p>
+  <!--speed-->
+  <p class="prose">Working memory is 0.2 GB for Nemotron and Parakeet and 2.55 GB for Voxtral (mostly its attention caches). On top of that come the memory-mapped weight files: 1.25 GB for each 0.6B model and 5.25 GB for Voxtral q8h. Nemotron's step also runs on the Neural Engine through Core ML, at 24.3 ms against 21.3 ms on the GPU (measured while the machine was loaded; the quiet re-run is below if it finished). The GPU path stays.</p>
+  <h3>A 30-minute session</h3>
+  <p class="prose">Thirty minutes of LibriSpeech test-clean, run back to back as fast as possible, heats the laptop more than live dictation would. This test shows whether steps slow down over time or memory grows.</p>
+  <!--drift-->
+  <!--long-->
+  <h3>With another GPU job running</h3>
+  <p class="prose" id="contention-note">Step times for Nemotron 160 ms and Parakeet h4 while a Voxtral transcription runs at the same time.</p>
+</section>
+
+<section>
+  <h2>Failure notes</h2>
+  <div class="notes">
+    <div>
+      <h3>Short backchannels vanish</h3>
+      <p>On AMI, every model sometimes returns nothing for <q>Yeah.</q>, <q>'Kay.</q> or <q>Ah.</q>: Nemotron 160 ms on 5 of 150 clips, Voxtral on 10. That matters little for dictation, where people don't dictate backchannels.</p>
+    </div>
+    <div>
+      <h3>Voxtral cuts endings short</h3>
+      <p>On short, disfluent clips, Voxtral stops early: <q>Oh, you wanna have oh yeah, the users</q> became <q>Oh, you want the…</q>. It uses the reference's exact end-of-stream padding, so this is how the model behaves, not a porting error. Extra trailing silence might help, as the D4 fix did for Nemotron; that is untested.</p>
+    </div>
+    <div>
+      <h3>Nemotron can loop</h3>
+      <p>On one earnings-call clip, Nemotron 160 ms repeated <q>AAA AAA AAA AAA</q> where the other two wrote <q>AAA</q> once. It is rare, but visible when it happens; a repeat guard in the decoder would catch it.</p>
+    </div>
+    <div>
+      <h3>Earnings-22 scores are pessimistic</h3>
+      <p>Several reference clips contain neighbouring speech the transcript leaves out (<q>Thank you. Thank you.</q>). All three models transcribe it, so part of every model's 11–13% is the test set's error, not the model's.</p>
+    </div>
+    <div>
+      <h3>Voxtral writes numbers as digits</h3>
+      <p><q>three, six month</q> became <q>3, 6, month</q>. For dictation that is arguably better; the normalizer forgives only some of it, so the WER counts it against Voxtral.</p>
+    </div>
+    <div>
+      <h3>Parakeet can drop a whole clip</h3>
+      <p>One Earnings-22 clip (<q>In the context of Sierra Gorda…</q>) came back empty from both Parakeet modes, while the other two models transcribed it almost perfectly.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Not covered yet</h2>
+  <ul class="prose">
+    <li><span class="status open">needs you</span> The dictation set: 30 prompts recorded on this Mac's microphone with <code>dictate-cli record eval/dictation_prompts.txt</code>. The report adds a column for it when the recordings exist.</li>
+    <li><span class="status no">over budget</span> Voxtral's step time grows with how far into the stream it is: 76 ms at 10 s, 89–100 ms at 34 s. Not yet profiled. Voxtral optimization is deprioritized.</li>
+    <li><span class="status open">not measured</span> Power draw: <code>powermetrics</code> needs root. GPU and CPU utilization were not recorded separately.</li>
+    <li><span class="status open">partial</span> Parakeet's latency is measured on test-other only; its test-clean runs predate step recording.</li>
+  </ul>
+  <p class="meta">Method: every configuration streams audio through the engine in 20 ms pieces through the same live API the app will use. WER uses the Whisper English normalizer and jiwer. Forced alignment uses the MMS_FA wav2vec2 aligner. Raw runs are in <code>artifacts/eval</code>, and the page is rebuilt by <code>eval/report_html.py</code>.</p>
+</section>
+</div>
