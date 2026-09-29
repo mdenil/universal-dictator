@@ -42,5 +42,14 @@ This file lists every accepted difference between our engine and the reference i
 - **What:** NeMo's batch-1 cache-aware streaming (`CacheAwareStreamingAudioBuffer`) skips a final chunk shorter than 8 mel frames. At 160 ms this loses the last word, or at least the final period, on some utterances. Batched NeMo runs do not have this problem, because short utterances are padded and masked through their lengths. That explains our +0.15 (test-clean) and +0.25 (test-other) WER gap against the reference's batch-32 WER runs: 8 of our 19 test-clean differences, and 13 of 27 on test-other, are exactly a missing final word.
 - **Change:** in live streaming, a short final tail is zero-extended to 8 frames with the extra rows masked as invalid, the way batched NeMo handles it. Appending real silence instead was tried and rejected: it made the model drop the final period.
 - **How to select it:** on by default. `DICTATOR_END_PAD=0` or `NemotronStream.endPadding = false` gives the exact batch-1 NeMo schedule, which the equivalence tests use.
-- **Measured:** on 40 utterances from the reference test-clean subset, WER is unchanged and 7 transcripts regain their final period. The rerun on the full 500-utterance reference subsets is pending.
+- **Measured (2026-09-29, fp16, 160 ms, the reference's 500-utterance subsets):**
+
+  | | test-clean | test-other |
+  |---|---|---|
+  | NeMo batch-1 schedule (before D4) | 2.85% (S 205 D 36 I 35) | 5.62% (S 371 D 79 I 47) |
+  | masked tail (D4) | 2.71% (S 197 D 29 I 36) | 5.34% (S 359 D 64 I 49) |
+  | NeMo reference WER (batch 32) | 2.70% | 5.37% |
+
+  D4 closes the gap on both sets. The drop comes mostly from deletions (the recovered final words). The test-other run was suspended partway through, so its RTF column is not a speed measurement.
+  - Command: `dictate-cli eval --model nemotron-160 --manifest data/subsets/test-{clean,other}_subset500.jsonl`.
 - **Review:** at M6.
