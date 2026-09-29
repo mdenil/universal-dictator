@@ -26,5 +26,13 @@ This file lists every accepted difference between our engine and the reference i
 - **Parity baseline:** at bf16 (`model.safetensors`), `dictate-cli ladder voxtral` is token-exact on 20/20 dev utterances. The worst stage cosine is 0.9999998 (mel, conv stem, encoder layers 0/1/15/31, adapter, decoder input and layers 0/1/12/25).
 - **`dictator-q8.safetensors`:** per-row int8 for the decoder FFN and attention, the encoder linears and the adapter. The embedding, output head, norms and conv stem stay bf16. K/V caches are fp16 (D1-style, token-identical on the clip).
 - **`dictator-q4ffn.safetensors`:** like q8, but the decoder FFN is 4-bit group-64 (fp16 scales), and the output head is an int8 copy (`lm_head.weight`).
-- **Measured, first 100 test-other utterances:** q8 4.47% WER, q4ffn 4.59%. bf16: pending. Test-clean: pending.
+- **Measured on the first 100 utterances of each set (WER):**
+
+  | Precision | test-clean | test-other |
+  |---|---|---|
+  | bf16 | 0.85% | 4.47% |
+  | q8 | 0.85% | 4.47% |
+  | q4ffn | 0.85% | 4.59% |
+
+  q8 is WER-identical to bf16 on both sets. q4ffn adds +0.12 points on test-other.
 - **Review:** M6 picks the shipping precision from WER against speed.
