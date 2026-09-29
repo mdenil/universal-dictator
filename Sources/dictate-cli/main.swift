@@ -118,6 +118,7 @@ do {
         FileHandle.standardError.write(String(format: "load %.2fs | prefill %.1f ms | %d steps, p50 %.1f ms p99 %.1f ms | audio %.2fs wall %.2fs | tokens %@\n",
             load, sess.stepTimes[0] * 1000, st.count, st.isEmpty ? 0 : st[st.count / 2] * 1000, st.isEmpty ? 0 : st[st.count * 99 / 100] * 1000,
             Double(audio.count) / 16000, wall, sess.emitted.map(String.init).joined(separator: ",")).data(using: .utf8)!)
+        if Step.profiling { print("GPU profile (all steps incl. prefill):"); Step.printProfile() }
         if !sess.splitTimes.isEmpty {
             let e = sess.splitTimes.map { $0.enc }.sorted(), d = sess.splitTimes.map { $0.dec }.sorted()
             FileHandle.standardError.write(String(format: "GPU per step: encoder p50 %.1f ms, decoder p50 %.1f ms\n", e[e.count / 2] * 1000, d[d.count / 2] * 1000).data(using: .utf8)!)

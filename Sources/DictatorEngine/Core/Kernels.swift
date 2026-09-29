@@ -22,8 +22,14 @@ struct GemmParams {
 /// A whole streaming step is recorded into one `Step` and committed once.
 public final class Step {
     public let ctx: MetalContext
-    public let cb: MTLCommandBuffer
-    public let enc: MTLComputeCommandEncoder
+    public private(set) var cb: MTLCommandBuffer
+    public private(set) var enc: MTLComputeCommandEncoder
+    /// Profiling (DICTATOR_PROFILE=1): `section(name)` runs the work recorded since the previous
+    /// section as its own command buffer and charges its GPU time to the previous section's name.
+    public static let profiling = ProcessInfo.processInfo.environment["DICTATOR_PROFILE"] == "1"
+    public nonisolated(unsafe) static var profile: [String: Double] = [:]
+    private var currentSection: String?
+    private var sectionTotal = 0.0
 
     public init(_ ctx: MetalContext = .shared) {
         self.ctx = ctx
@@ -31,9 +37,42 @@ public final class Step {
         self.enc = cb.makeComputeCommandEncoder()!
     }
 
+    /// Marks the start of a named section (no-op unless profiling).
+    public func section(_ name: String) {
+        guard Step.profiling else { return }
+        flushSection()
+        currentSection = name
+    }
+
+    private func flushSection() {
+        enc.endEncoding()
+        cb.commit()
+        cb.waitUntilCompleted()
+        let t = cb.gpuEndTime - cb.gpuStartTime
+        sectionTotal += t
+        if let n = currentSection { Step.profile[n, default: 0] += t }
+        cb = ctx.queue.makeCommandBuffer()!
+        enc = cb.makeComputeCommandEncoder()!
+    }
+
+    public static func printProfile() {
+        let total = profile.values.reduce(0, +)
+        for (k, v) in profile.sorted(by: { $0.value > $1.value }) {
+            print(String(format: "  %-22@ %9.1f ms  %5.1f%%", k as NSString, v * 1000, 100 * v / max(total, 1e-12)))
+        }
+    }
+
     /// Ends encoding, commits and waits. Returns GPU execution time in seconds.
     @discardableResult
     public func run() -> Double {
+        if Step.profiling {
+            flushSection()
+            let t = sectionTotal
+            sectionTotal = 0
+            currentSection = nil
+            enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
+            return t
+        }
         enc.endEncoding()
         cb.commit()
         cb.waitUntilCompleted()

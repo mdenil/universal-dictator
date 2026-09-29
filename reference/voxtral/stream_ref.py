@@ -91,8 +91,8 @@ def run_one(model, processor, dtype, utt, out_root: Path):
     vc.save(d, "tokens", np.array(gen_ids, dtype=np.int64))
     vc.save(d, "conv_stem_out", vc.cat(cap.embedder))
     vc.save(d, "adapter_out", vc.cat(cap.adapter))
-    vc.save(d, "logits_top10_values", torch.stack(cap.logits_topv).numpy())
-    vc.save(d, "logits_top10_ids", torch.stack(cap.logits_topi).numpy())
+    vc.save(d, "logits_top10_values", torch.stack(cap.logits_topv).cpu().numpy())
+    vc.save(d, "logits_top10_ids", torch.stack(cap.logits_topi).cpu().numpy())
     (d / "transcript.txt").write_text(text + "\n")
     # Emission log: step k is the k-th decoder step (position 38 + k); the text is what a
     # streaming client would print after that step (decode of the new token alone).

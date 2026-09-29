@@ -230,7 +230,8 @@ class Capture:
         m = model.model
 
         def f32(t):
-            return t.detach().to("cpu", torch.float32)
+            # stay on the device (no per-hook sync); moved to CPU in cat()/finish()
+            return t.detach().to(torch.float32).clone()
 
         def rec(lst):
             return lambda mod, i, o: lst.append(f32(o[0] if isinstance(o, tuple) else o)[0])
@@ -276,7 +277,7 @@ class Capture:
 
 
 def cat(lst):
-    return torch.cat(lst, dim=0).numpy() if lst else None
+    return torch.cat(lst, dim=0).cpu().numpy() if lst else None
 
 
 def save(d: Path, name: str, arr) -> None:

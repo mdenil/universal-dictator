@@ -86,11 +86,11 @@ def run_one(model, processor, dtype, utt, out_root: Path, dec_layers, n_dec_pos,
     vc.save(d, "dec_input_ids", np.array(seq[: min(n_dec_pos, len(seq))], dtype=np.int64))
     for i in dec_layers:
         vc.save(d, f"dec_layer_{i:02d}_out", vc.cat(cap.dec_layers[i])[:n_dec_pos])
-    vc.save(d, "t_cond", cap.t_cond.numpy())
-    vc.save(d, "ada_scale", torch.stack([cap.ada[i] for i in sorted(cap.ada)]).numpy())
-    vc.save(d, "logits_first30", torch.stack(cap.logits_full).numpy())
-    vc.save(d, "logits_top10_values", torch.stack(cap.logits_topv).numpy())
-    vc.save(d, "logits_top10_ids", torch.stack(cap.logits_topi).numpy())
+    vc.save(d, "t_cond", cap.t_cond.cpu().numpy())
+    vc.save(d, "ada_scale", torch.stack([cap.ada[i] for i in sorted(cap.ada)]).cpu().numpy())
+    vc.save(d, "logits_first30", torch.stack(cap.logits_full).cpu().numpy())
+    vc.save(d, "logits_top10_values", torch.stack(cap.logits_topv).cpu().numpy())
+    vc.save(d, "logits_top10_ids", torch.stack(cap.logits_topi).cpu().numpy())
     vc.save(d, "tokens", np.array(gen, dtype=np.int64))
     (d / "transcript.txt").write_text(text + "\n")
 
@@ -104,7 +104,7 @@ def run_one(model, processor, dtype, utt, out_root: Path, dec_layers, n_dec_pos,
     else:
         recon = emb + adapter[:n_chk]
     input_sum_maxabs = float(np.abs(recon - dec_in[:n_chk]).max())
-    steps_argmax = torch.stack(cap.logits_topi)[:, 0].numpy()
+    steps_argmax = torch.stack(cap.logits_topi)[:, 0].cpu().numpy()
     argmax_matches_tokens = bool(np.array_equal(steps_argmax[: len(gen)], np.array(gen)))
 
     meta = {

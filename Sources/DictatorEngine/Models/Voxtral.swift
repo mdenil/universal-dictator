@@ -288,6 +288,7 @@ public final class VoxtralSession {
         let m = model
         let T = mel.shape[0], n = T / 8, E = T / 2
         // conv1: causal k=3 s=1 over [2 cached ; T] mel frames.
+        s.section("enc.stem")
         let melX = scratch.get("melX", [T + 2, 128])
         s.copy(convMelCache, into: melX.rows(0, 2))
         s.copy(mel, into: melX.rows(2, T))
@@ -313,17 +314,21 @@ public final class VoxtralSession {
         let nrm = scratch.get("encNrm", [E, m.encDim]), q = scratch.get("encQ", [E, W]), att = scratch.get("encAtt", [E, W])
         let g = scratch.get("encG", [E, m.encFF]), u = scratch.get("encU", [E, m.encFF])
         for (li, L) in m.enc.enumerated() {
+            s.section("enc.qkv")
             s.rmsNorm(x, gamma: L.n1, out: nrm)
             s.gemm(nrm, L.wq, bias: L.bq, out: q)
             let kr = encKV.k[li].rows(slot, E), vr = encKV.v[li].rows(slot, E)
             s.gemm(nrm, L.wk, out: kr)
             s.gemm(nrm, L.wv, bias: L.bv, out: vr)
+            s.section("enc.rope+attn")
             s.rope(q, heads: m.encHeads, headDim: m.encHD, invFreq: m.encInvFreq, pos0: encPos)
             s.rope(kr, heads: m.encHeads, headDim: m.encHD, invFreq: m.encInvFreq, pos0: encPos)
             s.attention(q: q, k: encKV.k[li].rows(0, slot + E), v: encKV.v[li].rows(0, slot + E), ranges: ranges, out: att,
                         heads: m.encHeads, kvHeads: m.encHeads, headDim: m.encHD)
             let x2 = scratch.get("encB", [E, m.encDim])
+            s.section("enc.o")
             s.gemm(att, L.wo, bias: L.bo, out: x2, residual: x)
+            s.section("enc.ffn")
             s.rmsNorm(x2, gamma: L.n2, out: nrm)
             s.gemm(nrm, L.wgate, out: g)
             s.gemm(nrm, L.wup, out: u)
@@ -335,6 +340,7 @@ public final class VoxtralSession {
         }
         encKV.count = slot + E
         encPos += E
+        s.section("enc.adapter")
         let xn = scratch.get("encB", [E, m.encDim])
         s.rmsNorm(x, gamma: m.encNorm, out: xn)
         // §5 adapter: stack 4 consecutive frames (row-major reshape), 5120 -> 3072 GELU -> 3072.
@@ -348,6 +354,7 @@ public final class VoxtralSession {
     func decode(_ s: Step, ids newIds: [Int], audio: Tensor) -> (Tensor, Tensor) {
         let m = model
         let M = newIds.count
+        s.section("dec.embed")
         let idsT = scratch.get("ids", [M], .i32)
         newIds.map { Int32($0) }.withUnsafeBytes { idsT.contents.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
         var x = scratch.get("decA", [M, m.decDim])
@@ -361,17 +368,21 @@ public final class VoxtralSession {
         let nrm = scratch.get("decNrm", [M, m.decDim]), q = scratch.get("decQ", [M, QW]), att = scratch.get("decAtt", [M, QW])
         let g = scratch.get("decG", [M, m.decFF]), u = scratch.get("decU", [M, m.decFF])
         for (li, L) in m.dec.enumerated() {
+            s.section("dec.qkv")
             s.rmsNorm(x, gamma: L.n1, out: nrm)
             s.gemm(nrm, L.wq, out: q)
             let kr = decKV.k[li].rows(slot, M), vr = decKV.v[li].rows(slot, M)
             s.gemm(nrm, L.wk, out: kr)
             s.gemm(nrm, L.wv, out: vr)
+            s.section("dec.rope+attn")
             s.rope(q, heads: m.decHeads, headDim: m.decHD, invFreq: m.decInvFreq, pos0: decPos)
             s.rope(kr, heads: m.decKV, headDim: m.decHD, invFreq: m.decInvFreq, pos0: decPos)
             s.attention(q: q, k: decKV.k[li].rows(0, slot + M), v: decKV.v[li].rows(0, slot + M), ranges: ranges, out: att,
                         heads: m.decHeads, kvHeads: m.decKV, headDim: m.decHD)
             let x2 = scratch.get("decB", [M, m.decDim])
+            s.section("dec.o")
             s.gemm(att, L.wo, out: x2, residual: x)
+            s.section("dec.ffn")
             s.rmsNorm(x2, gamma: L.n2ada, out: nrm)
             s.gemm(nrm, L.wgate, out: g)
             s.gemm(nrm, L.wup, out: u)
@@ -383,6 +394,7 @@ public final class VoxtralSession {
         }
         decKV.count = slot + M
         decPos += M
+        s.section("dec.head")
         let last = scratch.get("decLast", [1, m.decDim])
         s.rmsNorm(x.rows(M - 1, 1), gamma: m.decNorm, out: last)
         let logits = scratch.get("logits", [1, m.vocab])

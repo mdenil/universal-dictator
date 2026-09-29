@@ -7,7 +7,10 @@
 constant constexpr int GEMV_MAX_M = 8;
 constant constexpr int GEMV_ROWS = 4;      // output columns per simdgroup
 constant constexpr int GEMV_SG = 4;        // simdgroups per threadgroup
-constant constexpr int GEMV_KB = 512;      // K block staged in threadgroup memory (M*KB floats <= 16 KB)
+constant constexpr int GEMV_KB = 512;
+// Function constant 0: 2-byte weights use the row-interleaved loop (activations reused across rows).
+constant int gemv_interleave_flag [[function_constant(0)]];
+constant bool gemv_rows_interleaved = gemv_interleave_flag != 0;      // K block staged in threadgroup memory (M*KB floats <= 16 KB)
 
 template <typename T> inline float4 load4(device const T* p) { return float4(*(device const vec<T, 4>*)p); }
 template <> inline float4 load4<ushort>(device const ushort* p) {
@@ -97,12 +100,13 @@ kernel void gemv_nt(
             for (int k16 = int(lane); k16 < kl4 / 4; k16 += 32) {
                 uint4 u[GEMV_ROWS];
                 for (int r = 0; r < nrows; r++) u[r] = *(device const uint4*)((device const char*)(W + (long)(n0 + r) * p.ldb + kb) + k16 * 16);
-                for (int r = 0; r < nrows; r++) {
-                    float4 w0 = c4(u[r].x), w1 = c4(u[r].y), w2 = c4(u[r].z), w3 = c4(u[r].w);
-                    for (int m = 0; m < M; m++) {
-                        threadgroup const float4* x = xs + m * (GEMV_KB / 4) + 4 * k16;
-                        acc[r][m] += dot(w0, x[0]) + dot(w1, x[1]) + dot(w2, x[2]) + dot(w3, x[3]);
-                    }
+                // Activation slice for this lane's 16 columns: loaded from threadgroup memory once,
+                // reused for every row (threadgroup bandwidth, not DRAM, limited the M > 1 case).
+                for (int m = 0; m < M; m++) {
+                    threadgroup const float4* xp = xs + m * (GEMV_KB / 4) + 4 * k16;
+                    float4 x0 = xp[0], x1 = xp[1], x2 = xp[2], x3 = xp[3];
+                    for (int r = 0; r < nrows; r++)
+                        acc[r][m] += dot(c4(u[r].x), x0) + dot(c4(u[r].y), x1) + dot(c4(u[r].z), x2) + dot(c4(u[r].w), x3);
                 }
             }
         }

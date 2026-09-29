@@ -25,21 +25,26 @@ public enum VoxtralLadder {
 
         // Stage taps: our tensors per name, concatenated over calls (prefill + steps) so positions line up.
         var taps: [String: [Float]] = [:]
+        var pending: [(String, Tensor)] = []
         let sess = VoxtralSession(model: model)
         sess.useSnapshot = false          // compute every position so all encoder frames are tapped
-        sess.tap = { name, t in taps[name, default: []] += t.toFloats() }
+        sess.tap = { name, t in pending.append((name, t)) }
+        // Tapped tensors are filled when the step's command buffer runs; read them afterwards.
+        func drain() { for (n, t) in pending { taps[n, default: []] += t.toFloats() }; pending = [] }
         let P = T / 8
         let promptLen = model.prompt.count
         var tok = sess.prefill(mel: Array(mel[0..<(8 * promptLen * 128)]))
+        drain()
         var p = promptLen
         while tok != model.eos && p < P - 1 {
             tok = sess.step(mel: Array(mel[(8 * p * 128)..<(8 * (p + 1) * 128)]))
+            drain()
             p += 1
         }
         let encNames = ["conv_stem_out", "enc_layer_00_out", "enc_layer_01_out", "enc_layer_15_out", "enc_layer_31_out", "adapter_out"]
         let decNames = ["dec_in", "dec_layer_00_out", "dec_layer_01_out", "dec_layer_12_out", "dec_layer_25_out"]
         for name in encNames + decNames {
-            guard let g = golden(name), let ours = taps[name] else {
+            guard let g = golden(name) ?? (name == "dec_in" ? golden("dec_input_embeds") : nil), let ours = taps[name] else {
                 rows.append(LadderRow(name: name, shape: [], cosine: .nan, maxAbs: .nan, refMaxAbs: .nan, skipped: "missing"))
                 continue
             }
