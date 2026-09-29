@@ -208,10 +208,10 @@ final class SlidingKV {
     let k: [Tensor], v: [Tensor]
     var base = 0, count = 0
 
-    init(layers: Int, window: Int, slack: Int, width: Int, ctx: MetalContext) {
+    init(layers: Int, window: Int, slack: Int, width: Int, dtype: DType = .f32, ctx: MetalContext) {
         self.window = window; capacity = window + slack; self.width = width
-        k = (0..<layers).map { _ in Tensor(ctx, shape: [window + slack, width]) }
-        v = (0..<layers).map { _ in Tensor(ctx, shape: [window + slack, width]) }
+        k = (0..<layers).map { _ in Tensor(ctx, shape: [window + slack, width], dtype: dtype) }
+        v = (0..<layers).map { _ in Tensor(ctx, shape: [window + slack, width], dtype: dtype) }
     }
 
     /// Makes room for n new rows (shifting inside `s` if needed). Returns the slot of the first new row.
@@ -266,8 +266,10 @@ public final class VoxtralSession {
     public init(model: VoxtralModel) {
         self.model = model
         ctx = model.ctx
-        encKV = SlidingKV(layers: model.encLayers, window: model.encWindow, slack: 250, width: model.encHeads * model.encHD, ctx: ctx)
-        decKV = SlidingKV(layers: model.decLayers, window: model.decWindow, slack: 512, width: model.decKV * model.decHD, ctx: ctx)
+        // K/V caches in fp16 (DICTATOR_KV_F32=1 keeps fp32).
+        let kvType: DType = ProcessInfo.processInfo.environment["DICTATOR_KV_F32"] == "1" ? .f32 : .f16
+        encKV = SlidingKV(layers: model.encLayers, window: model.encWindow, slack: 250, width: model.encHeads * model.encHD, dtype: kvType, ctx: ctx)
+        decKV = SlidingKV(layers: model.decLayers, window: model.decWindow, slack: 512, width: model.decKV * model.decHD, dtype: kvType, ctx: ctx)
         scratch = Scratch(ctx)
         convMelCache = Tensor(ctx, shape: [2, 128]); memset(convMelCache.contents, 0, convMelCache.byteCount)
         conv1Cache = Tensor(ctx, shape: [1, 1280]); memset(conv1Cache.contents, 0, conv1Cache.byteCount)
@@ -455,7 +457,7 @@ public final class VoxtralSession {
         s.run()
         let E = 4 * positions
         func copyRows(_ ts: [Tensor], _ n: Int) -> [Tensor] {
-            ts.map { t in let c = Tensor(ctx, shape: [n, t.shape[1]]); memcpy(c.contents, t.contents, n * t.shape[1] * 4); return c }
+            ts.map { t in let c = Tensor(ctx, shape: [n, t.shape[1]], dtype: t.dtype); memcpy(c.contents, t.contents, c.byteCount); return c }
         }
         let cm = Tensor(ctx, shape: [2, 128]); memcpy(cm.contents, convMelCache.contents, cm.byteCount)
         let c1 = Tensor(ctx, shape: [1, 1280]); memcpy(c1.contents, conv1Cache.contents, c1.byteCount)

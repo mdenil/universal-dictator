@@ -141,6 +141,8 @@ INSTANTIATE_GEMV("gemv_nt_f32_f16_f32", float, half, float)
 INSTANTIATE_GEMV("gemv_nt_f16_f16_f32", half, half, float)
 INSTANTIATE_GEMV("gemv_nt_f32_bf16_f32", float, ushort, float)
 INSTANTIATE_GEMV("gemv_nt_f32_i8_f32", float, char, float)
+INSTANTIATE_GEMV("gemv_nt_f32_i8_f16", float, char, half)
+INSTANTIATE_GEMV("gemv_nt_f32_bf16_f16", float, ushort, half)
 
 // ---------------------------------------------------------------- 4-bit GEMV (M <= 8)
 // W packed [N, K/2] bytes (low nibble = even element), scales f16 [N, K/64]; value = (nibble-8)*scale.

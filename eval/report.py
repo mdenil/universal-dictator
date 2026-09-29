@@ -55,7 +55,7 @@ def main():
     table = {}
     for path in sorted(glob.glob(str(ROOT / "artifacts/eval" / a.pattern))):
         name = Path(path).stem
-        m = re.match(r"(.+?)_(f16|f32|q8|q4\w*|int8|fp32)_(test-clean|test-other|dictation)(?:_(?:ref)?(\d+))?$", name)
+        m = re.match(r"(.+?)_(f16|f32|q8|q4\w*|bf16|int8|fp32)_(test-clean|test-other|dictation)(?:_(?:ref)?(\d+))?$", name)
         if not m:
             continue
         cfg, prec, tset = m.group(1), m.group(2), m.group(3)

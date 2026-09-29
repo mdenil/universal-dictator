@@ -150,7 +150,7 @@ extension Step {
     /// In-place rotate-half RoPE on x [T, H*d] (row stride = last dim) for positions pos0 ..< pos0 + T.
     public func rope(_ x: Tensor, heads H: Int, headDim d: Int, invFreq: Tensor, pos0: Int) {
         let ld = x.shape.last!, T = x.count / ld
-        let p = try! ctx.pipeline("rope_rotate_half")
+        let p = try! ctx.pipeline(x.dtype == .f16 ? "rope_rotate_half_f16" : "rope_rotate_half")
         bind(x, 0); bind(invFreq, 1)
         setBytes(RopeParams(T: Int32(T), H: Int32(H), d: Int32(d), ld: Int32(ld), pos0: Int32(pos0)), 2)
         enc.setComputePipelineState(p)

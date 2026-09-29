@@ -19,18 +19,21 @@ kernel void im2col1d(device const float* x [[buffer(0)]], device float* out [[bu
 //   x_i' = x_i cos - x_{i+d/2} sin;  x_{i+d/2}' = x_{i+d/2} cos + x_i sin
 struct RopeParams { int T, H, d, ld, pos0; };
 
-kernel void rope_rotate_half(device float* x [[buffer(0)]], device const float* inv_freq [[buffer(1)]],
+template <typename T>
+kernel void rope_rotate_half(device T* x [[buffer(0)]], device const float* inv_freq [[buffer(1)]],
                              constant RopeParams& p [[buffer(2)]], uint3 g [[thread_position_in_grid]]) {
     int i = g.x, h = g.y, t = g.z;
     int half_d = p.d / 2;
     if (i >= half_d || h >= p.H || t >= p.T) return;
     float angle = float(p.pos0 + t) * inv_freq[i];
     float c = cos(angle), s = sin(angle);
-    device float* row = x + (long)t * p.ld + h * p.d;
-    float a = row[i], b = row[i + half_d];
-    row[i] = a * c - b * s;
-    row[i + half_d] = b * c + a * s;
+    device T* row = x + (long)t * p.ld + h * p.d;
+    float a = float(row[i]), b = float(row[i + half_d]);
+    row[i] = T(a * c - b * s);
+    row[i + half_d] = T(b * c + a * s);
 }
+template [[host_name("rope_rotate_half")]] kernel void rope_rotate_half<float>(device float*, device const float*, constant RopeParams&, uint3);
+template [[host_name("rope_rotate_half_f16")]] kernel void rope_rotate_half<half>(device half*, device const float*, constant RopeParams&, uint3);
 
 // ---------------------------------------------------------------- GQA attention, online softmax
 // q [Tq, Hq*d] (row stride ldq), K/V [Tk, Hkv*d] (row stride ldk); query head h uses kv head h / (Hq/Hkv).
