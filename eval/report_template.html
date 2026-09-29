@@ -90,7 +90,7 @@ q { font-style: italic; quotes: "“" "”"; }
     <div class="pick" style="--c: var(--vox)">
       <span class="role">Not yet</span>
       <span class="name">Voxtral Mini 4B</span>
-      <p>The best on clean read speech and earnings calls, but on streams longer than about 10 s it doesn't keep up with real time, words appear about 0.7 s late, and it needs about 7.8 GB. Revisit after the speed work.</p>
+      <p>The best on clean read speech and earnings calls, but it doesn't keep up: over a long session its step climbs from 83 ms to about 180 ms against an 80 ms budget. Words also appear about 0.7 s late, and it needs about 7.8 GB. Revisit after the speed work.</p>
     </div>
   </div>
   <p class="meta">These picks cover everything except your own dictation recordings, which haven't been recorded yet. The plan treats that set as the one that matters most, so treat these picks as provisional until it's scored.</p>
@@ -126,13 +126,15 @@ q { font-style: italic; quotes: "“" "”"; }
   <!--load-->
   <p class="cap">Bars show the median step as a share of its budget; the black tick marks the 99th percentile. Voxtral takes an 80 ms step every 80 ms of audio, while the other models take a 160 ms step.</p>
   <!--speed-->
-  <p class="prose">Working memory is 0.2 GB for Nemotron and Parakeet and 2.55 GB for Voxtral (mostly its attention caches). On top of that come the memory-mapped weight files: 1.25 GB for each 0.6B model and 5.25 GB for Voxtral q8h. Nemotron's step also runs on the Neural Engine through Core ML, at 24.3 ms against 21.3 ms on the GPU (measured while the machine was loaded; the quiet re-run is below if it finished). The GPU path stays.</p>
+  <p class="prose">Working memory is 0.2 GB for Nemotron and Parakeet and 2.55 GB for Voxtral (mostly its attention caches). On top of that come the memory-mapped weight files: 1.25 GB for each 0.6B model and 5.25 GB for Voxtral q8h. </p>
+  <h3>Neural Engine and CPU alternatives</h3>
+  <p class="prose">Nemotron's steady-state step, converted to Core ML and timed on the same quiet machine, takes 21.2 ms on the Neural Engine, 22.5 ms on Core ML's GPU path and 27.4 ms on the CPU, against 22.8 ms for our Metal path. Their outputs agree with our engine to within 7e-3. The Neural Engine is no faster, but it would leave the GPU free, which matters in the contention test below. sherpa-onnx, which runs the same Nemotron checkpoint on 4 CPU threads, needs 0.25 s of compute per second of audio in int8 and 0.96 s in fp32. Our engine needs 0.16 s.</p>
   <h3>A 30-minute session</h3>
-  <p class="prose">Thirty minutes of LibriSpeech test-clean, run back to back as fast as possible, heats the laptop more than live dictation would. This test shows whether steps slow down over time or memory grows.</p>
+  <p class="prose">Thirty minutes of LibriSpeech test-clean, run back to back as fast as possible, heats the laptop more than live dictation would. Nemotron and Parakeet stay flat. Voxtral's step grows with its position in the stream and settles at about 180 ms, more than twice its budget. Memory stays bounded in the live path, which the app uses: Nemotron's working memory went from 175 MB on a 10 s clip to 239 MB after 5 minutes, and the harness's own records account for part of that. The <code>transcribe</code> command computes features for the whole file up front, which reached 1.3 GB on the 30-minute file. That cost belongs to the CLI, not the engine.</p>
   <!--drift-->
   <!--long-->
   <h3>With another GPU job running</h3>
-  <p class="prose" id="contention-note">Step times for Nemotron 160 ms and Parakeet h4 while a Voxtral transcription runs at the same time.</p>
+  <p class="prose" id="contention-note">With a Voxtral transcription running at the same time, which keeps the GPU saturated, Nemotron 160 ms's median step rises from 23 ms to 80 ms, still half its budget, but its 99th percentile reaches 216–371 ms. Parakeet h4's median rises to 123–136 ms and its 99th percentile to 204–401 ms, so it falls behind whenever the GPU is busy. The app should give its GPU work high priority, or run Nemotron on the Neural Engine, before a GPU-heavy app next to it can make dictation stutter.</p>
 </section>
 
 <section>
@@ -169,7 +171,8 @@ q { font-style: italic; quotes: "“" "”"; }
   <h2>Not covered yet</h2>
   <ul class="prose">
     <li><span class="status open">needs you</span> The dictation set: 30 prompts recorded on this Mac's microphone with <code>dictate-cli record eval/dictation_prompts.txt</code>. The report adds a column for it when the recordings exist.</li>
-    <li><span class="status no">over budget</span> Voxtral's step time grows with how far into the stream it is: 76 ms at 10 s, 89–100 ms at 34 s. Not yet profiled. Voxtral optimization is deprioritized.</li>
+    <li><span class="status no">over budget</span> Voxtral's step time grows with how far into the stream it is, from 83 ms in the first minute to about 180 ms. Not yet profiled. Voxtral optimization is deprioritized.</li>
+    <li><span class="status open">design</span> Dictation under GPU contention: the step's 99th percentile goes over budget when another app saturates the GPU. The options are command-queue priority or running Nemotron on the Neural Engine.</li>
     <li><span class="status open">not measured</span> Power draw: <code>powermetrics</code> needs root. GPU and CPU utilization were not recorded separately.</li>
     <li><span class="status open">partial</span> Parakeet's latency is measured on test-other only; its test-clean runs predate step recording.</li>
   </ul>

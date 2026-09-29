@@ -37,6 +37,16 @@ Voxtral is under budget on a 10.4 s clip (q8h and q4ffn both 75–81 ms p50, 2 i
 
 GEMV bandwidth at the Voxtral shapes (`dictate-cli probe voxtral`, quiet): M=1 int8 and bf16 reach 80–91 GB/s (the decoder is at the bandwidth limit); M=1 q4 reaches only 44–46 GB/s (unpacking-bound, so q4 decoder FFN is no faster than int8: 0.311 vs 0.331 ms for 9216×3072); M=4 int8 (encoder) reaches 38–46 GB/s.
 
+## Long session, contention and Neural Engine (quiet, 2026-09-29)
+
+Raw output: `artifacts/timing_m6/`; command: `scratch/m6_timing.sh`.
+
+- 30 minutes of test-clean, back to back: Nemotron 160 ms p50 24 ms in both the first and last 5 minutes (p99 45 ms); Parakeet h4 53 → 48 ms (p99 102 ms); Voxtral q8h 99 → 174 ms (p99 224 ms). Voxtral's step grows with stream position and settles at about 180 ms, more than twice its 80 ms budget.
+- Memory: the live path (`eval`) goes from 175 MB (10 s clip) to 239 MB (5 min) for Nemotron. The 1.3 GB peak in the 30-minute `transcribe` run is the CLI computing features for the whole file up front (1.18 GB MALLOC_LARGE after 25 s), not engine growth. Wrapping each step in an autorelease pool changed nothing (368 MB both ways on 5 min) and was reverted. Voxtral's live wrapper never dropped consumed audio or mel rows; it now does (commit ade293d).
+- Contention, with a Voxtral run saturating the GPU: Nemotron 160 ms p50 80 ms, p99 216–371 ms; Parakeet h4 p50 123–136 ms, p99 204–401 ms.
+- Nemotron step through Core ML: Neural Engine 21.2 ms, Core ML GPU 22.5 ms, CPU 27.4 ms; our Metal 22.8 ms in the same session. Outputs within 7e-3 of the engine.
+- sherpa-onnx (4 CPU threads), same Nemotron 160 ms checkpoint on 20 test-clean utterances: RTF 0.25 int8, 0.96 fp32; ours 0.16.
+
 ## Kept
 
 | # | Change | Result | Correctness |

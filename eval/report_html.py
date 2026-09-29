@@ -214,8 +214,8 @@ def tables(d):
         [[sw(l), f'{cand[l]["budget"]} ms'] + ([fmt(tm[k][0], "{:.0f} ms"), fmt(tm[k][1], "{:.0f} ms"), fmt(tm[k][0] / cand[l]["budget"] * 100, "{:.0f}%")]
           if (k := TIMING_NAMES[l]) in tm else ["—"] * 3) for l in cand])
     lo = d["longs"]
-    t["long"] = table(["Configuration", "Steps", "p50, first 5 min", "p50, last 5 min", "p99, whole session", "Peak memory (excl. mapped weights)"],
-        [[sw(l), str(v["steps"]), fmt(v["first5"], "{:.0f} ms"), fmt(v["last5"], "{:.0f} ms"), fmt(v["p99"], "{:.0f} ms"), fmt(v["footprint_gb"], "{:.2f} GB")]
+    t["long"] = table(["Configuration", "Steps", "Step budget", "p50, first 5 min", "p50, last 5 min", "p99, whole session"],
+        [[sw(l), str(v["steps"]), f'{cand[l]["budget"]} ms', fmt(v["first5"], "{:.0f} ms"), fmt(v["last5"], "{:.0f} ms"), fmt(v["p99"], "{:.0f} ms")]
          for l, v in lo.items()])
     return t
 
