@@ -20,3 +20,11 @@ This file lists every accepted difference between our engine and the reference i
 - **Effect:** none on normalized WER (the normalizer strips punctuation). A sentence-final period is arguably the better dictation output.
 - **Measured:** `dictate-cli ladder parakeet --golden-root data/golden/parakeet/offline_70_2_5 --stream-root data/golden/parakeet/stream_70_2_5`.
 - **Review:** at M6. Instrument the reference's last step (encoder length and emitted tokens) if exact end-of-stream parity is needed.
+
+## D3: Voxtral int8 and int4 weights
+
+- **Parity baseline:** at bf16 (`model.safetensors`), `dictate-cli ladder voxtral` is token-exact on 20/20 dev utterances. The worst stage cosine is 0.9999998 (mel, conv stem, encoder layers 0/1/15/31, adapter, decoder input and layers 0/1/12/25).
+- **`dictator-q8.safetensors`:** per-row int8 for the decoder FFN and attention, the encoder linears and the adapter. The embedding, output head, norms and conv stem stay bf16. K/V caches are fp16 (D1-style, token-identical on the clip).
+- **`dictator-q4ffn.safetensors`:** like q8, but the decoder FFN is 4-bit group-64 (fp16 scales), and the output head is an int8 copy (`lm_head.weight`).
+- **Measured, first 100 test-other utterances:** q8 4.47% WER, q4ffn 4.59%. bf16: pending. Test-clean: pending.
+- **Review:** M6 picks the shipping precision from WER against speed.

@@ -226,3 +226,37 @@ Consolidated prefix `…` = `mm_streams_embeddings.embedding_module.` (+ `whispe
 8. Positions (encoder and decoder) count from the start of the padded stream and keep increasing past the sliding window.
 9. The sliding window admits W keys including the query itself (750, not 751).
 10. BF16 checkpoint: the "fp32 reference" is fp32 arithmetic on bf16-valued weights.
+
+## 10. Measured behaviour (dev20, MPS fp32 golden)
+
+- Emitted tokens on dev20 (20 utts, 3,184 decisions after the one that is still running was completed): only `[STREAMING_PAD]` (32), `[STREAMING_WORD]` (33) and text ids appear. **EOS was never emitted on any utterance**: generation always stops at the length cap P, after 8–14 trailing PADs. The first [W] comes at decision 4–13. Example (say1 clip): `P P W " The" P W " quick" P W " brown" P P P W " fox" … W " over" " the" …` (two words sharing one [W], as the paper describes).
+- Checks on every dev20 utterance: the decoder input equals `embed[id] + adapter_out` exactly (max-abs 0.0), and the argmax of the captured logits equals the emitted token at every step.
+- The encoder runs on 4·(P−1) frames: `generate()` never consumes the last position's audio, so `enc_layer_*_out` and `adapter_out` have P−1 rows.
+- **Independent re-implementation** (`reference/voxtral/spec_check.py`, CPU fp32 from raw safetensors, using only this spec) against the MPS fp32 golden, on 5105-28240-0020 (2.3 s) and 2961-961-0022 (24.45 s, 1496 encoder frames, so the window is active): mel (fp64) 1.2e-5 max-abs; conv stem 1.4e-5; encoder layer 0 9.1e-6 (rel 2e-7); final encoder norm 2.9e-6; adapter 3.1e-5; decoder input 0; t_cond 1.2e-7; ada scales 1.2e-7; decoder layer 0 1.1e-5 (rel 1e-7); logits via the tied head 1.9e-4 (rel 3.7e-6); argmax equal. With encoder window 749 or 751 instead of 750, the layer-0 error rises to 2.4e-2; with no window it is 0.2. So the window size, RoPE layout, bias placement, stacking order and `t_cond` formula in this spec are confirmed.
+
+## 11. Precision and memory (reference runs)
+
+- The fp32 golden is **fp32 arithmetic on the bf16 weights**: weights stay bf16 in memory and are copied into a reused fp32 scratch buffer just before each Linear/Conv1d (`vox_common.enable_fp32_compute`). bf16→fp32 is exact, so this is the same function as a full-fp32 model, at 8.9 GB instead of 17.7 GB. The non-persistent `inv_freq` buffers were confirmed fp32 at load.
+- **Device: MPS.** CPU fp32 was measured at 6–12 s per decoder step on this machine (system swap at 21–30 GB because of other workloads; profiling showed 94% of the time in `copy_` of weights, i.e. paging), which is too slow for dev20. MPS fp32 ran at 0.63–0.85 s per step (one utterance at 10.6 s/step while the machine was swapping hard). The dev20 golden run took 4,391 s wall time, with a peak footprint of 11.1 GB.
+- The official path is bf16 (weights, activations and mel all bf16; `t_cond` is computed in bf16).
+
+## 12. Reference WER (so far)
+
+- dev20 (10 test-clean + 10 test-other, 559 words), offline, MPS fp32, Whisper English normalizer + jiwer: **WER 6.08%** (30 S, 2 D, 2 I). The errors are dominated by dialect spellings in test-other ("scuse me … yo figger" → "excuse me daniel …") and one proper-noun passage (2609-156975-0004). dev20 is too small and too hard to compare with the published figures.
+- Published figures (paper Table 5, 480 ms): LibriSpeech test-clean **2.08%**, test-other **5.54%**. The model card gives no LibriSpeech numbers.
+- The 100-utterance test-clean and test-other runs (MPS bf16, `wer.py --librispeech … --n 100`) were queued but had not finished when this was written.
+
+## 13. Open questions
+
+| Question | Answer | Evidence |
+|---|---|---|
+| RoPE layout in `model.safetensors` | Rotate-half (NeoX); q/k rows (and the encoder q bias) are pre-permuted per head from the interleaved consolidated layout; no permutation needed | Bit-exact comparison with consolidated tensors (§4.3); `spec_check.py` |
+| What `[STREAMING_WORD]` means | Word-group onset marker, emitted once a word is acoustically complete and the delay has elapsed; carries no text; dropped on decode | Paper §2.3/§3.1; observed token streams (§10) |
+| Prompt / prefix | `[1] + [32]×38` (BOS + PAD × (32 left-pad + 6 delay)) | `MCA:753-766`, `MCI:1092-1105`, tekken.json |
+| Silence left pad | 40960 samples (32 × 1280) | `MCA:713-732`, tekken.json |
+| n_delay for 480 ms | 6 | `MCA:477-507` |
+| t_cond formula | §6.2 | `MOD:838-851`; `spec_check.py` 1.2e-7 |
+| Sliding window semantics | W keys including self | `MASK:93-102`; off-by-one test (§10) |
+| EOS | Never emitted on dev20; offline generation ends at the length cap | §10 |
+| Streaming vs offline token identity | **Unresolved at the time of writing**: `stream_ref.py` was running | — |
+| Noise floor | **Unresolved at the time of writing**: runs were queued (`noise_floor.json` not yet written) | — |
