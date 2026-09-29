@@ -2,19 +2,40 @@
 
 This file lists kept and rejected performance changes. Step 1 of the performance ritual reads it. Timings marked *noisy* were taken while other heavy jobs were running on the machine, and are indicative only.
 
-## Measured peaks (this M3, 2026-09-28)
-
-These are the first measurements, taken while downloads were running, so they are noisy. They will be re-measured in a quiet window.
+## Measured peaks (this M3, quiet, 2026-09-29)
 
 | Measurement | Value |
 |---|---|
-| Read bandwidth | 87 GB/s |
-| Copy bandwidth | 84 GB/s |
+| Read bandwidth | 93.5 GB/s |
+| Copy bandwidth | 90.8 GB/s (read + write) |
 | FMA, fp32 | 2.95 TFLOPS |
 | FMA, fp16 | 3.17 TFLOPS |
-| Empty command-buffer round trip | 154 µs |
-| `maxBufferLength` | 13.6 GB |
-| Recommended working set | 18.2 GB |
+| GEMM f32 4096³ (our kernel) | 2.33 TFLOPS |
+| GEMM f16 4096³ (our kernel) | 2.06 TFLOPS |
+| Empty command-buffer round trip | 151 µs |
+| `maxBufferLength` / recommended working set | 13.6 GB / 18.2 GB |
+
+Command: `dictate-cli peaks`. The 2026-09-28 numbers (87 GB/s read) were taken during downloads.
+
+## Step times (quiet, 2026-09-29)
+
+One 33.9 s clip (`test-clean/1995/1836/1995-1836-0004`), 3 runs after a warm-up, wall time per streaming step. Raw output: `artifacts/timing_quiet_2026-09-29.txt`; command: `scratch/ab/timing.sh`.
+
+| Configuration | Step p50 | Step p99 | Step budget |
+|---|---|---|---|
+| Nemotron 160 ms, f16 | 21.3–22.3 ms | 23–26 ms | 160 ms |
+| Nemotron 560 ms, f16 | 36.1–36.7 ms | 39 ms | 560 ms |
+| Nemotron 160 ms, f32 | 38.4–38.9 ms | 43–44 ms | 160 ms |
+| Parakeet exact buffered, f16 | 83.8–86.8 ms | 96–132 ms | 160 ms |
+| Parakeet horizon 4, f16 | 48.1–52.1 ms | 57–61 ms | 160 ms |
+| Voxtral q8h (int8 + int8 head) | 88.8–100.5 ms | 105–145 ms | 80 ms |
+| Voxtral q8 | 103.7–105.0 ms | 122–145 ms | 80 ms |
+| Voxtral q4ffn | 103.8–113.7 ms | 121–168 ms | 80 ms |
+| Voxtral bf16 | 156–191 ms | 226–296 ms | 80 ms |
+
+Voxtral is under budget on a 10.4 s clip (q8h and q4ffn both 75–81 ms p50, 2 interleaved pairs) but not on this 33.9 s clip; the cost grows with stream position (not yet profiled; deprioritized 2026-09-29).
+
+GEMV bandwidth at the Voxtral shapes (`dictate-cli probe voxtral`, quiet): M=1 int8 and bf16 reach 80–91 GB/s (the decoder is at the bandwidth limit); M=1 q4 reaches only 44–46 GB/s (unpacking-bound, so q4 decoder FFN is no faster than int8: 0.311 vs 0.331 ms for 9216×3072); M=4 int8 (encoder) reaches 38–46 GB/s.
 
 ## Kept
 
@@ -34,6 +55,9 @@ These are the first measurements, taken while downloads were running, so they ar
 
 | # | Change | Result | Retry only if |
 |---|---|---|---|
+| R7 | GEMV pipelines specialized on M (function constant; loops unroll, accumulators sized) | neutral at every Voxtral shape, 2 interleaved pairs | never; the compiler already keeps the accumulators in registers |
+| R6 | int8 GEMV: convert weights to float once per chunk instead of once per activation row | neutral at every Voxtral shape (M=4 enc 42 GB/s both), 2 interleaved pairs | never; the compiler hoists it |
+| R5 | q4 GEMV with 16 weights per lane (8-byte loads) so a 512-wide K block fills all 32 lanes | neutral (q4 M=1 45 GB/s both; Voxtral step 78 ms both), 2 interleaved pairs | the q4 unpack becomes cheap (then lane occupancy may matter) |
 | R4 | Row-interleaved bf16/f16 GEMV (same idea as K5) | neutral to worse at M=4 (2 interleaved pairs) — 2-byte path is load-issue bound, not threadgroup bound | M > 8 per call, or a different register budget |
 | R3 | GEMV without threadgroup staging (activations read from device/cache directly, 8 simdgroups) | not better, mostly worse on 2 pairs across bf16/int8 | a GPU with larger L1 or different cache policy |
 | R2 | GEMV: load activations into registers once per K step and reuse across the 4 rows of a simdgroup | no gain or slightly worse (M=4 bf16 ≈ 25–31 GB/s) — the limit was bytes per load, fixed by K4 | the kernel becomes threadgroup-memory bound |

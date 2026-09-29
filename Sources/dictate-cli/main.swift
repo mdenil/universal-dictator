@@ -9,6 +9,8 @@ commands:
   transcribe   transcribe a WAV/FLAC file with streaming inference:
                transcribe <audio> [--model nemotron|parakeet] [--latency 160|560] [--precision f32|f16]
                parakeet: default exact buffered (Stage A); --horizon H uses frozen-prefix caching
+               [--step-log <file>] writes each step's wall time (also for voxtral)
+  voxtral      voxtral <audio> [--weights model.safetensors|dictator-q8h.safetensors] [--step-log <file>]
   eval         live-stream a manifest to jsonl (score with eval/score.py, eval/latency.py):
                eval --model nemotron-160|nemotron-560|parakeet|parakeet-h<H>|voxtral --manifest <jsonl> --out <jsonl>
                     [--precision f16|f32] [--weights dictator-q8.safetensors] [--limit N]
@@ -42,6 +44,12 @@ func transcriberFactory(spec: String) throws -> () -> StreamingTranscriber {
         return { VoxtralLive(model: model) }
     }
     throw EngineError.io("unknown model spec \(spec)")
+}
+
+/// --step-log <path>: one step wall time (seconds) per line, for drift over long sessions.
+func writeStepLog(_ times: [Double]) throws {
+    guard let path = option("--step-log") else { return }
+    try times.map { String(format: "%.6f", $0) }.joined(separator: "\n").write(toFile: path, atomically: true, encoding: .utf8)
 }
 
 func option(_ name: String, _ def: String? = nil) -> String? {
@@ -98,6 +106,7 @@ do {
         }
         let wall = Date().timeIntervalSince(t1)
         print(text)
+        try writeStepLog(wallTimes)
         let w = wallTimes.sorted()
         FileHandle.standardError.write(String(format: "load %.2fs | %d steps of %d ms | audio %.2fs, wall %.3fs (RTF %.4f) | per-step wall p50 %.2f ms p99 %.2f ms\n",
             load, w.count, chunkMs, Double(audio.count) / 16000, wall, wall / (Double(audio.count) / 16000),
@@ -114,6 +123,7 @@ do {
         let text = sess.transcribeOffline(audio)
         let wall = Date().timeIntervalSince(t1)
         print(text)
+        try writeStepLog(sess.stepTimes)
         let st = sess.stepTimes.dropFirst().sorted()
         FileHandle.standardError.write(String(format: "load %.2fs | prefill %.1f ms | %d steps, p50 %.1f ms p99 %.1f ms | audio %.2fs wall %.2fs | tokens %@\n",
             load, sess.stepTimes[0] * 1000, st.count, st.isEmpty ? 0 : st[st.count / 2] * 1000, st.isEmpty ? 0 : st[st.count * 99 / 100] * 1000,
