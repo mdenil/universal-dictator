@@ -47,6 +47,15 @@ Raw output: `artifacts/timing_m6/`; command: `scratch/m6_timing.sh`.
 - Nemotron step through Core ML: Neural Engine 21.2 ms, Core ML GPU 22.5 ms, CPU 27.4 ms; our Metal 22.8 ms in the same session. Outputs within 7e-3 of the engine.
 - sherpa-onnx (4 CPU threads), same Nemotron 160 ms checkpoint on 20 test-clean utterances: RTF 0.25 int8, 0.96 fp32; ours 0.16.
 
+## Nemotron on the Neural Engine (2026-09-30)
+
+`--backend ane` runs Nemotron's encoder step through Core ML (models from `reference/coreml/nemotron_ane.py`: first-chunk and steady-state shapes, engine masking as inputs, joint encoder projection included); frontend and RNN-T decoding stay on the CPU.
+
+- Accuracy, first 200 utterances, against Metal on the same utterances: 160 ms 2.05 / 5.73% (Metal 2.10 / 5.77%), 560 ms 1.90 / 5.05% (Metal 1.90 / 5.02%); 4–10% of transcripts differ (fp16), WER unchanged.
+- **560 ms does not run on the Neural Engine**: its models fail the ANE compile (`ANECCompile() FAILED`) and Core ML falls back to the CPU (powermetrics: ANE 0 W, CPU 3.7 W). The 560 ms accuracy above is the CPU fallback's.
+- 160 ms step: 19.0 ms p50 (Metal 23.0 ms). Power, looping a 5-minute file with a warm compile cache: ANE 2.62 W + CPU 2.03 W + GPU 0.12 W = 4.76 W, against Metal's 4.77 W (GPU 3.96 W, CPU 0.81 W). Being faster, it uses about 17% less energy per second of audio. The extra ~1.2 W of CPU is probably input construction and moving the 7 MB of K/V caches each step (next: stateful caches).
+- A Neural Engine compile-cache miss costs about 40 s of CPU at load; the cache was observed to be evicted between runs.
+
 ## Kept
 
 | # | Change | Result | Correctness |

@@ -10,6 +10,7 @@ commands:
                transcribe <audio> [--model nemotron|parakeet] [--latency 160|560] [--precision f32|f16]
                parakeet: default exact buffered (Stage A); --horizon H uses frozen-prefix caching
                [--step-log <file>] writes each step's wall time (also for voxtral)
+               nemotron: --backend ane runs the encoder on the Neural Engine (Core ML; also for eval)
   voxtral      voxtral <audio> [--weights model.safetensors|dictator-q8h.safetensors] [--step-log <file>]
   eval         live-stream a manifest to jsonl (score with eval/score.py, eval/latency.py):
                eval --model nemotron-160|nemotron-560|parakeet|parakeet-h<H>|voxtral --manifest <jsonl> --out <jsonl>
@@ -29,6 +30,14 @@ func transcriberFactory(spec: String) throws -> () -> StreamingTranscriber {
     if spec.hasPrefix("nemotron") {
         let latency = spec.hasSuffix("560") ? 560 : Int(option("--latency", "160")!)!
         let model = try NemotronModel(modelDir: URL(fileURLWithPath: "models/\(NemoModelKind.nemotron.dirName)"), kind: .nemotron, precision: precision)
+        if option("--backend", "metal") == "ane" {
+            let dir = URL(fileURLWithPath: "models/\(NemoModelKind.nemotron.dirName)")
+            return {
+                let s = NemotronStream(model: model, lookahead: latency / 80 - 1)
+                s.ane = try! NemotronANEEncoder(modelDir: dir, schedule: s.schedule)
+                return s
+            }
+        }
         return { NemotronStream(model: model, lookahead: latency / 80 - 1) }
     }
     if spec.hasPrefix("parakeet") {
@@ -89,6 +98,7 @@ do {
         case .nemotron:
             let latency = Int(option("--latency", "160")!)!
             let stream = NemotronStream(model: model, lookahead: latency / 80 - 1)
+            if option("--backend", "metal") == "ane" { stream.ane = try NemotronANEEncoder(modelDir: modelDir, schedule: stream.schedule) }
             let mel = model.frontend.features(audio)
             // NeMo's streaming buffer treats every mel frame (including the zeroed last one) as valid.
             stream.runBuffered(mel: mel, frames: audio.count / 160 + 1, validFrames: audio.count / 160 + 1)

@@ -87,6 +87,9 @@ public final class NemotronStream {
     public var endPadding = ProcessInfo.processInfo.environment["DICTATOR_END_PAD"] != "0"
     var liveEmissions: [Emission] = []
 
+    /// When set, the encoder step runs on the Neural Engine through Core ML instead of Metal.
+    public var ane: NemotronANEEncoder?
+
     /// Receives the kept encoder output rows of each chunk (parity testing).
     public var encTap: (([Float]) -> Void)?
 
@@ -110,6 +113,15 @@ public final class NemotronStream {
     @discardableResult
     public func step(melRows: UnsafeBufferPointer<Float>, nRows: Int, validRows: Int, keepAll: Bool) -> [Int] {
         let t0 = DispatchTime.now().uptimeNanoseconds
+        if let ane = ane {
+            let (p, validT) = try! ane.step(mel: melRows, nRows: nRows, validRows: validRows)
+            let keep = keepAll ? validT : min(validT, schedule.outFramesPerChunk)
+            var newTokens = [Int]()
+            if keep > 0 { model.decoder.greedy(encProj: Array(p.prefix(keep * model.decoder.hidden)), frames: keep, state: &decState, tokens: &newTokens) }
+            tokens += newTokens
+            wallTimes.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
+            return newTokens
+        }
         let bins = model.encoder.config.melBins
         let chunkMel = melIn.rows(0, nRows)
         memcpy(chunkMel.contents, melRows.baseAddress!, nRows * bins * 4)
