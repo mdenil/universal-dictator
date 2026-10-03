@@ -116,15 +116,16 @@ struct PanelView: View {
             switch controller.phase {
             case .listening, .paused:
                 if controller.phase == .listening { LevelMeter(level: controller.level) }
-                Text(controller.copiedSoFar ? "Copied so far" : status)
+                Text(status)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(controller.copiedSoFar ? Color.green : Color.secondary)
+                    .foregroundStyle(.secondary)
                     .monospacedDigit()
                 Spacer()
-                Button("Copy so far") { controller.copySoFar() }
+                Button(controller.copiedSoFar ? "Copied ✓" : "Copy so far") { controller.copySoFar() }
                     .keyboardShortcut("c", modifiers: .command)
                     .buttonStyle(.borderless)
                     .font(.system(size: 12))
+                    .foregroundStyle(controller.copiedSoFar ? Color.green : Color.secondary)
                     .disabled(controller.text.isEmpty)
                 if controller.phase == .listening {
                     Button("Pause") { controller.pause() }.keyboardShortcut(.space, modifiers: [])
