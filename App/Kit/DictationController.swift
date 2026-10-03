@@ -96,6 +96,8 @@ public final class DictationController {
     public private(set) var level: Float = 0
     /// Briefly true after ⌘C copied the text so far.
     public private(set) var copiedSoFar = false
+    /// Whether the panel is showing. The microphone only runs while it is.
+    public private(set) var isPanelOpen = false
 
     let loader: ModelLoader
     let microphone: AudioInput
@@ -159,6 +161,7 @@ public final class DictationController {
 
     /// The panel opened: start listening, or resume a dictation paused by closing the panel.
     public func panelOpened() async {
+        isPanelOpen = true
         switch phase {
         case .idle: await start()
         case .paused: resume()
@@ -170,8 +173,14 @@ public final class DictationController {
 
     /// The panel closed: listening pauses, so the microphone is never on while the panel is hidden.
     public func panelClosed() {
+        isPanelOpen = false
         startWhenReady = false
         if phase == .listening { pause() }
+    }
+
+    /// Asks for microphone access up front (at launch), so the prompt never appears in the middle of a click.
+    public func requestMicrophoneAccessIfNeeded() async {
+        if !permission.isGranted && !permission.isDenied { _ = await permission.request() }
     }
 
     // MARK: Dictation
@@ -183,6 +192,9 @@ public final class DictationController {
             let granted = await permission.request()
             if !granted { phase = .microphoneDenied; return }
         }
+        // The panel may have closed while this was starting (a permission prompt takes focus): the microphone
+        // never runs with the panel hidden.
+        guard isPanelOpen else { return }
         do {
             let s = try factory!.makeSession()
             session = s
@@ -242,7 +254,7 @@ public final class DictationController {
     }
 
     public func resume() {
-        guard phase == .paused, let s = session else { return }
+        guard phase == .paused, isPanelOpen, let s = session else { return }
         s.resume()
         do { try startMicrophone(s); phase = .listening } catch { phase = .failed("Couldn’t start the microphone: \(error)") }
     }

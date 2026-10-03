@@ -28,5 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Load at launch so a click starts listening straight away (the first launch after installing also
         // compiles the model for the Neural Engine).
         controller.loadModel()
+        // Ask for the microphone now rather than on the first click: the system prompt takes focus, which
+        // would close the panel mid-start.
+        Task { await controller.requestMicrophoneAccessIfNeeded() }
     }
 }

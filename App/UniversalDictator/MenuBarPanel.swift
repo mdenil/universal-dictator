@@ -40,10 +40,15 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         var x = screenFrame.midX - size.width / 2
         x = min(max(x, screen.minX + 8), screen.maxX - size.width - 8)
         panel.setFrame(NSRect(x: x, y: screenFrame.minY - size.height - 6, width: size.width, height: size.height), display: true)
-        NSApp.activate(ignoringOtherApps: true)
+        // The panel takes keyboard focus without activating the app, like Spotlight: the app's menus never
+        // replace the frontmost app's (which on a notched MacBook pushes status icons, ours included, behind
+        // the notch), and closing the panel leaves the previous app in front, ready for ⌘V.
         panel.makeKeyAndOrderFront(nil)
         item.button?.highlight(true)
-        Task { await controller.panelOpened() }
+        Task { [weak self] in
+            guard let self, self.panel.isVisible else { return }
+            await self.controller.panelOpened()
+        }
     }
 
     func close() {
@@ -52,8 +57,6 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         lastClose = Date()
         item.button?.highlight(false)
         controller.panelClosed()
-        // Hand focus back to the app that was in front, so Copy can be followed straight away by ⌘V.
-        NSApp.hide(nil)
     }
 
     func windowDidResignKey(_ notification: Notification) { close() }
@@ -61,6 +64,10 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
     /// Keeps the menu-bar icon in step with the dictation (listening, paused, preparing).
     func updateIcon() {
         withObservationTracking {
+            // Safety net: the microphone never runs while the panel is hidden.
+            if controller.phase == .listening && !panel.isVisible {
+                Task { @MainActor [weak self] in self?.controller.panelClosed() }
+            }
             let name: String
             switch controller.phase {
             case .listening: name = "waveform.badge.mic"
@@ -81,8 +88,9 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
 /// A borderless panel that can take keyboard focus (for editing and shortcuts).
 final class DropDownPanel: NSPanel {
     init() {
-        super.init(contentRect: NSRect(x: 0, y: 0, width: 360, height: 260), styleMask: [.borderless, .fullSizeContentView],
+        super.init(contentRect: NSRect(x: 0, y: 0, width: 360, height: 260), styleMask: [.borderless, .nonactivatingPanel, .fullSizeContentView],
                    backing: .buffered, defer: true)
+        becomesKeyOnlyIfNeeded = false
         isFloatingPanel = true
         level = .popUpMenu
         hasShadow = true

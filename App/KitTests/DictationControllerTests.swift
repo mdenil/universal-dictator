@@ -43,6 +43,15 @@ struct FakePermission: MicrophonePermission {
     func request() async -> Bool { granted }
 }
 
+/// Not yet asked; granting takes a moment (the system prompt), during which the panel may close.
+final class PromptPermission: MicrophonePermission, @unchecked Sendable {
+    var asked = false
+    var onPrompt: (@MainActor () -> Void)?
+    var isGranted: Bool { asked }
+    var isDenied: Bool { false }
+    func request() async -> Bool { await onPrompt?(); asked = true; return true }
+}
+
 final class FakeClipboard: Clipboard { var text: String?; func copy(_ t: String) { text = t } }
 
 @MainActor
@@ -125,6 +134,32 @@ final class DictationControllerTests: XCTestCase {
         await c.panelOpened()
         XCTAssertEqual(c.phase, .done)
         XCTAssertEqual(c.editedText, "hello world")
+    }
+
+    /// The panel closes while the permission prompt is up: granting must not start the microphone.
+    func testPanelClosedDuringPermissionPromptKeepsMicOff() async {
+        let perm = PromptPermission()
+        let c = DictationController(model: .nemotron160, loader: FakeLoader(factory: factory), microphone: mic, permission: perm, clipboard: clip)
+        c.loadModel()
+        for _ in 0..<50 where c.phase == .preparing { try? await Task.sleep(for: .milliseconds(5)) }
+        perm.onPrompt = { c.panelClosed() }
+        await c.panelOpened()
+        XCTAssertFalse(mic.running)
+        XCTAssertNotEqual(c.phase, .listening)
+        await c.panelOpened()                              // the next click starts normally
+        XCTAssertEqual(c.phase, .listening); XCTAssertTrue(mic.running)
+    }
+
+    /// Opening while the model loads, then closing before it is ready: the microphone stays off.
+    func testClosedBeforeModelReadyKeepsMicOff() async {
+        let c = DictationController(model: .nemotron160, loader: FakeLoader(factory: factory), microphone: mic,
+                                    permission: FakePermission(), clipboard: clip)
+        c.loadModel()
+        await c.panelOpened()
+        c.panelClosed()
+        for _ in 0..<20 { try? await Task.sleep(for: .milliseconds(5)) }
+        XCTAssertFalse(mic.running)
+        XCTAssertNotEqual(c.phase, .listening)
     }
 
     func testMicrophoneDenied() async {
