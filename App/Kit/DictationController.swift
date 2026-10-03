@@ -270,12 +270,21 @@ public final class DictationController {
         phase = .done
     }
 
-    /// ⌘C while listening or paused: copies the text so far without stopping.
+    /// "Copy so far" while listening or paused: copies the text so far without stopping.
     public func copySoFar() {
         guard phase == .listening || phase == .paused else { return }
         clipboard.copy(text)
         copiedSoFar = true
         Task { try? await Task.sleep(for: .seconds(1.5)); copiedSoFar = false }
+    }
+
+    /// ⌘C while listening or paused: stops (the microphone goes off and the last words are finished),
+    /// copies the whole text and clears the dictation. The panel closes.
+    public func stopAndCopy() async {
+        guard phase == .listening || phase == .paused else { return }
+        await stop()
+        clipboard.copy(editedText)
+        reset()
     }
 
     /// Copy after Stop: copies the edited text and clears the dictation. The panel closes.

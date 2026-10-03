@@ -59,7 +59,8 @@ open build/DerivedData/Build/Products/Release/UniversalDictator.app
 Using it:
 
 - **Click the icon:** the panel opens and listening starts. Words appear about 0.3 s after you say them; the grey word is still being recognised.
-- **Space** pauses and resumes. **⌘C** copies the text so far without stopping. Clicking away also pauses.
+- **⌘C** stops, copies the whole text and closes the panel: click, talk, ⌘C, then ⌘V wherever you want it.
+- **Space** pauses and resumes. **Copy so far** copies the text without stopping. Clicking away also pauses.
 - **Return** (or Stop) ends the dictation; the text becomes editable.
 - **Copy** (⌘Return) copies the edited text and closes the panel; focus returns to the app you were in, ready for ⌘V. **New** starts again.
 - **The model menu** (top right) switches between Nemotron 160 ms and 560 ms, and has Quit.

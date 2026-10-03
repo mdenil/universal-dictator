@@ -122,7 +122,6 @@ struct PanelView: View {
                     .monospacedDigit()
                 Spacer()
                 Button(controller.copiedSoFar ? "Copied ✓" : "Copy so far") { controller.copySoFar() }
-                    .keyboardShortcut("c", modifiers: .command)
                     .buttonStyle(.borderless)
                     .font(.system(size: 12))
                     .foregroundStyle(controller.copiedSoFar ? Color.green : Color.secondary)
@@ -156,6 +155,19 @@ struct PanelView: View {
             }
         }
         .controlSize(.regular)
+        .background {
+            // ⌘C while dictating: stop, copy everything and close the panel.
+            Button("") {
+                Task {
+                    await controller.stopAndCopy()
+                    close()
+                }
+            }
+            .keyboardShortcut("c", modifiers: .command)
+            .disabled(controller.phase != .listening && controller.phase != .paused)
+            .opacity(0)
+            .allowsHitTesting(false)
+        }
     }
 
     var status: String { controller.phase == .paused ? "Paused · \(clock(controller.elapsed))" : clock(controller.elapsed) }
