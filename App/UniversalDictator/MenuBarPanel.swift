@@ -20,7 +20,8 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         panel.contentView = PanelBackground(content: host)
         panel.delegate = self
         item.button?.target = self
-        item.button?.action = #selector(toggle)
+        item.button?.action = #selector(clicked)
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         item.button?.toolTip = "Universal Dictator"
         updateIcon()
     }
@@ -28,6 +29,23 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
     /// When the panel last closed: clicking the menu-bar item while the panel is open first takes focus
     /// from the panel (closing it), and that same click must not reopen it.
     var lastClose = Date.distantPast
+
+    /// Left click toggles the panel; right click (or Control-click) shows the app menu with Quit.
+    @objc func clicked() {
+        let e = NSApp.currentEvent
+        if e?.type == .rightMouseUp || e?.modifierFlags.contains(.control) == true { showAppMenu() } else { toggle() }
+    }
+
+    func showAppMenu() {
+        close()
+        let menu = NSMenu()
+        let quit = NSMenuItem(title: "Quit Universal Dictator", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quit.target = NSApp
+        menu.addItem(quit)
+        item.menu = menu                     // shown under the icon like any menu-bar menu, then detached so
+        item.button?.performClick(nil)       // left clicks keep opening the panel
+        item.menu = nil
+    }
 
     @objc func toggle() {
         if panel.isVisible { close() } else if Date().timeIntervalSince(lastClose) > 0.3 { open() }

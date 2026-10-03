@@ -63,7 +63,8 @@ Using it:
 - **Space** pauses and resumes. **Copy so far** copies the text without stopping. Clicking away also pauses.
 - **Return** (or Stop) ends the dictation; the text becomes editable.
 - **Copy** (⌘Return) copies the edited text and closes the panel; focus returns to the app you were in, ready for ⌘V. **New** starts again.
-- **The model menu** (top right) switches between Nemotron 160 ms and 560 ms, and has Quit.
+- **The model menu** (top right) switches between Nemotron 160 ms and 560 ms.
+- **Right-click the icon** for Quit.
 
 The first launch after a build compiles the models for the Neural Engine (up to about a minute; the panel says so). The app asks for microphone access on the first click.
 

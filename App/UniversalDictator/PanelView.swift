@@ -43,8 +43,6 @@ struct PanelView: View {
                     }
                     .disabled(!controller.canChangeModel)
                 }
-                Divider()
-                Button("Quit Universal Dictator") { NSApp.terminate(nil) }
             } label: {
                 Text(controller.model.displayName).font(.system(size: 11, weight: .medium))
             }
@@ -151,7 +149,7 @@ struct PanelView: View {
                 Button("Open System Settings") { controller.openMicrophoneSettings() }.buttonStyle(.borderedProminent)
             case .idle, .preparing, .failed:
                 Spacer()
-                Button("Quit") { NSApp.terminate(nil) }.buttonStyle(.borderless).font(.system(size: 12))
+                Button("Close") { close() }.buttonStyle(.borderless).font(.system(size: 12))
             }
         }
         .controlSize(.regular)
