@@ -9,14 +9,14 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
     let controller: DictationController
     let item: NSStatusItem
     let panel: DropDownPanel
+    var host: NSHostingView<PanelView>!
 
     init(controller: DictationController) {
         self.controller = controller
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         panel = DropDownPanel()
         super.init()
-        let host = NSHostingView(rootView: PanelView(controller: controller, close: { [weak self] in self?.close() }))
-        host.sizingOptions = [.preferredContentSize]
+        host = NSHostingView(rootView: PanelView(controller: controller, close: { [weak self] in self?.close() }))
         panel.contentView = PanelBackground(content: host)
         panel.delegate = self
         item.button?.target = self
@@ -33,18 +33,36 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         if panel.isVisible { close() } else if Date().timeIntervalSince(lastClose) > 0.3 { open() }
     }
 
-    func open() {
-        guard let button = item.button, let screenFrame = button.window?.convertToScreen(button.frame) else { return }
-        let size = panel.contentView?.fittingSize ?? NSSize(width: 360, height: 260)
-        let screen = button.window?.screen?.visibleFrame ?? NSScreen.main!.visibleFrame
-        var x = screenFrame.midX - size.width / 2
+    /// Where the panel goes: under the menu-bar icon, inside the screen.
+    func panelFrame() -> NSRect? {
+        guard let button = item.button, let window = button.window else { return nil }
+        let iconFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
+        // The SwiftUI content's own size (the material view around it reports zero).
+        var size = host.fittingSize
+        if size.width < 100 || size.height < 100 { size = NSSize(width: 360, height: 238) }
+        let screen = window.screen?.visibleFrame ?? NSScreen.main!.visibleFrame
+        var x = iconFrame.midX - size.width / 2
         x = min(max(x, screen.minX + 8), screen.maxX - size.width - 8)
-        panel.setFrame(NSRect(x: x, y: screenFrame.minY - size.height - 6, width: size.width, height: size.height), display: true)
+        return NSRect(x: x, y: iconFrame.minY - size.height - 6, width: size.width, height: size.height)
+    }
+
+    /// For diagnosing placement without showing anything: the icon, screen and panel frames.
+    func describeGeometry() -> String {
+        let button = item.button
+        let iconFrame = button?.window.map { $0.convertToScreen(button!.convert(button!.bounds, to: nil)) }
+        return "icon \(String(describing: iconFrame)), screen \(String(describing: button?.window?.screen?.visibleFrame)), " +
+            "content fitting \(String(describing: host.fittingSize)), panel \(String(describing: panelFrame()))"
+    }
+
+    func open(startDictation: Bool = true) {
+        guard let frame = panelFrame(), frame.width > 0, frame.height > 0 else { return }
+        panel.setFrame(frame, display: true)
         // The panel takes keyboard focus without activating the app, like Spotlight: the app's menus never
         // replace the frontmost app's (which on a notched MacBook pushes status icons, ours included, behind
         // the notch), and closing the panel leaves the previous app in front, ready for ⌘V.
         panel.makeKeyAndOrderFront(nil)
         item.button?.highlight(true)
+        guard startDictation else { return }
         Task { [weak self] in
             guard let self, self.panel.isVisible else { return }
             await self.controller.panelOpened()
