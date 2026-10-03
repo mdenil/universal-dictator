@@ -12,3 +12,4 @@ __pycache__/
 *.xcodeproj/xcuserdata/
 DerivedData/
 /.build-dev/
+/build/

@@ -19,7 +19,9 @@ commands:
                     [--precision f16|f32] [--weights dictator-q8.safetensors] [--limit N]
   stream       live microphone transcription: stream --model nemotron-160|nemotron-560|parakeet-h4|voxtral
   record       record the dictation test set: record eval/dictation_prompts.txt [--out data/dictation]
+  dictate      the app's code path on a file: dictate <audio> [--assets build/app-assets] [--model nemotron160|nemotron560] [--pause-at S]
   convert      write converted weights: convert nemotron|parakeet --precision f16
+               convert app-assets [--out build/app-assets]: the Mac app's model folder
   ladder       compare against golden tensors:
                ladder nemotron --golden <utt-dir> [--context 70,1] [--model-dir models/...]
 """
@@ -215,6 +217,67 @@ do {
             if n % 100 == 0 { FileHandle.standardError.write("\(n) done\n".data(using: .utf8)!) }
         }
         try out.close()
+    case "dictate":
+        // dictate <audio> [--assets build/app-assets] [--model nemotron160|nemotron560] [--pause-at SECONDS]:
+        // the Mac app's code path (DictatorCore only): load, live session in 20 ms pieces, optional pause/resume.
+        let audio = try AudioFile.readMono16k(URL(fileURLWithPath: args[1]))
+        let assets = ModelAssets(directory: URL(fileURLWithPath: option("--assets", "build/app-assets")!))
+        guard let choice = ModelChoice(rawValue: option("--model", "nemotron160")!) else { throw EngineError.io("unknown --model") }
+        let pauseAt = option("--pause-at").flatMap(Double.init).map { Int($0 * 16000) }
+        let sem = DispatchSemaphore(value: 0)
+        var result: Result<String, Error> = .failure(EngineError.io("not run"))
+        let t0 = Date()
+        Task {
+            do {
+                let model = try await Engine.load(choice, assets: assets)
+                let load = Date().timeIntervalSince(t0)
+                let session = try model.startSession()
+                var i = 0
+                while i < audio.count {
+                    let k = min(320, audio.count - i)
+                    if let p = pauseAt, i <= p, p < i + k { session.pause(); session.resume() }
+                    session.push(Array(audio[i..<(i + k)])); i += k
+                }
+                let text = await session.stop()
+                if let e = session.error { throw e }
+                FileHandle.standardError.write(String(format: "load %.2fs (includes Neural Engine compile on first use)\n", load).data(using: .utf8)!)
+                result = .success(text)
+            } catch { result = .failure(error) }
+            sem.signal()
+        }
+        sem.wait()
+        print(try result.get())
+    case "convert" where args.count > 1 && args[1] == "app-assets":
+        // convert app-assets --out build/app-assets: the Mac app's model folder. Compiled stateful Core ML
+        // models for 160 and 560 ms (cloned, so no extra disk on APFS), the RNN-T decoder, joint and mel
+        // frontend weights as one small f32 file, and the tokenizer.
+        let src = URL(fileURLWithPath: "models/\(NemoModelKind.nemotron.dirName)")
+        let out = URL(fileURLWithPath: option("--out", "build/app-assets")!)
+        let fm = FileManager.default
+        if fm.fileExists(atPath: out.path) { try fm.removeItem(at: out) }
+        try fm.createDirectory(at: out, withIntermediateDirectories: true)
+        let assets = ModelAssets(directory: src)
+        for choice in ModelChoice.allCases {
+            let names = NemotronANEEncoder.modelNames(choice.schedule)
+            for name in [names.sub, names.state].compactMap({ $0 }) {
+                guard let compiled = try assets.compiledCoreMLModel(name) else {
+                    throw EngineError.io("\(name) not found in \(src.path)/coreml (reference/coreml/nemotron_ane.py --stateful)")
+                }
+                try fm.copyItem(at: compiled, to: out.appendingPathComponent(name + ".mlmodelc"))
+            }
+        }
+        let w = try SafeTensorsReader(src.appendingPathComponent("nemo_extracted/weights.safetensors"))
+        let keep = w.entries.keys.filter { $0.hasPrefix("decoder.") || $0.hasPrefix("joint.pred.") || $0.hasPrefix("joint.joint_net.") || $0.hasPrefix("preprocessor.featurizer.") }.sorted()
+        let writer = SafeTensorsWriter()
+        for name in keep {
+            let f = try w.floats(name)
+            writer.add(name, dtype: .f32, shape: w.entries[name]!.shape, data: f.withUnsafeBytes { Data($0) })
+        }
+        try writer.write(to: out.appendingPathComponent("nemotron-decoder.safetensors"))
+        try fm.copyItem(at: src.appendingPathComponent("nemo_extracted/tokenizer.vocab"), to: out.appendingPathComponent("tokenizer.vocab"))
+        let missing = ModelChoice.allCases.flatMap { ModelAssets(directory: out).missingFiles(for: $0) }
+        guard missing.isEmpty else { throw EngineError.io("app assets incomplete: \(missing)") }
+        print("wrote \(out.path): \(keep.count) decoder tensors, Core ML models for \(ModelChoice.allCases.map(\.displayName).joined(separator: ", "))")
     case "convert" where args.count > 1 && args[1] == "voxtral":
         // convert voxtral --quant dec-ffn,dec-attn,enc,adapter,stem --out dictator-q8.safetensors
         let dir = URL(fileURLWithPath: option("--model-dir", "models/Voxtral-Mini-4B-Realtime-2602")!)

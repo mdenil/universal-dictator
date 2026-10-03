@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "DictatorCore", targets: ["DictatorCore"]),
         .library(name: "DictatorEngine", targets: ["DictatorEngine"]),
+        .library(name: "UniversalDictatorKit", targets: ["UniversalDictatorKit"]),
         .executable(name: "dictate-cli", targets: ["dictate-cli"]),
     ],
     targets: [
@@ -19,10 +20,13 @@ let package = Package(
             dependencies: ["DictatorCore"],
             resources: [.copy("Metal")]
         ),
+        // The Mac app's dictation logic (no UI): used by App/UniversalDictator.xcodeproj.
+        .target(name: "UniversalDictatorKit", dependencies: ["DictatorCore"], path: "App/Kit"),
         .executableTarget(name: "dictate-cli", dependencies: ["DictatorEngine"]),
         .testTarget(name: "DictatorEngineTests", dependencies: ["DictatorEngine", "DictatorCore"]),
         // Links only DictatorCore: the dictation API on the Neural Engine with no Metal.
         .testTarget(name: "DictatorCoreTests", dependencies: ["DictatorCore"]),
+        .testTarget(name: "UniversalDictatorKitTests", dependencies: ["UniversalDictatorKit"], path: "App/KitTests"),
     ],
     swiftLanguageModes: [.v5]
 )

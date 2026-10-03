@@ -1,0 +1,293 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A1D1C7A70000000000000001 /* UniversalDictatorKit in Frameworks */ = {isa = PBXBuildFile; productRef = A1D1C7A70000000000000020 /* UniversalDictatorKit */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A1D1C7A70000000000000002 /* UniversalDictator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = UniversalDictator.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		A1D1C7A70000000000000003 /* UniversalDictator */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = UniversalDictator;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A1D1C7A70000000000000004 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1D1C7A70000000000000001 /* UniversalDictatorKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A1D1C7A70000000000000005 = {
+			isa = PBXGroup;
+			children = (
+				A1D1C7A70000000000000003 /* UniversalDictator */,
+				A1D1C7A70000000000000006 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A1D1C7A70000000000000006 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A1D1C7A70000000000000002 /* UniversalDictator.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A1D1C7A70000000000000007 /* UniversalDictator */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A1D1C7A70000000000000010 /* Build configuration list for PBXNativeTarget "UniversalDictator" */;
+			buildPhases = (
+				A1D1C7A70000000000000008 /* Sources */,
+				A1D1C7A70000000000000004 /* Frameworks */,
+				A1D1C7A70000000000000009 /* Resources */,
+				A1D1C7A7000000000000000A /* Bundle model assets */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A1D1C7A70000000000000003 /* UniversalDictator */,
+			);
+			name = UniversalDictator;
+			packageProductDependencies = (
+				A1D1C7A70000000000000020 /* UniversalDictatorKit */,
+			);
+			productName = UniversalDictator;
+			productReference = A1D1C7A70000000000000002 /* UniversalDictator.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A1D1C7A7000000000000000B /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2650;
+				LastUpgradeCheck = 2650;
+				TargetAttributes = {
+					A1D1C7A70000000000000007 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+				};
+			};
+			buildConfigurationList = A1D1C7A7000000000000000C /* Build configuration list for PBXProject "UniversalDictator" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A1D1C7A70000000000000005;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A1D1C7A70000000000000021 /* XCLocalSwiftPackageReference ".." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A1D1C7A70000000000000006 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A1D1C7A70000000000000007 /* UniversalDictator */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A1D1C7A70000000000000009 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A1D1C7A7000000000000000A /* Bundle model assets */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle model assets";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Copies the Nemotron model folder (Core ML models, decoder weights, tokenizer) into the app as\n# Contents/Resources/NemotronAssets. Build it first with: dictate-cli convert app-assets\n# APFS clones (cp -c) make the 2.2 GB copy instant and take no extra disk.\nset -e\nSRC=\"$PROJECT_DIR/../build/app-assets\"\nDST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/NemotronAssets\"\nif [ ! -f \"$SRC/tokenizer.vocab\" ]; then\n  echo \"error: model assets not found in $SRC. Run: swift build -c release && .build/release/dictate-cli convert app-assets\"\n  exit 1\nfi\nrm -rf \"$DST\"\nmkdir -p \"$(dirname \"$DST\")\"\ncp -cR \"$SRC\" \"$DST\" 2>/dev/null || cp -R \"$SRC\" \"$DST\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A1D1C7A70000000000000008 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A1D1C7A7000000000000000D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A1D1C7A7000000000000000E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		A1D1C7A7000000000000000F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Universal Dictator";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Universal Dictator turns your speech into text on this Mac. Audio never leaves the computer.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.universaldictator.UniversalDictator;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A1D1C7A70000000000000011 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "Universal Dictator";
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Universal Dictator turns your speech into text on this Mac. Audio never leaves the computer.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = dev.universaldictator.UniversalDictator;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A1D1C7A7000000000000000C /* Build configuration list for PBXProject "UniversalDictator" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1D1C7A7000000000000000D /* Debug */,
+				A1D1C7A7000000000000000E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A1D1C7A70000000000000010 /* Build configuration list for PBXNativeTarget "UniversalDictator" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A1D1C7A7000000000000000F /* Debug */,
+				A1D1C7A70000000000000011 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A1D1C7A70000000000000021 /* XCLocalSwiftPackageReference ".." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ..;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A1D1C7A70000000000000020 /* UniversalDictatorKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = UniversalDictatorKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A1D1C7A7000000000000000B /* Project object */;
+}

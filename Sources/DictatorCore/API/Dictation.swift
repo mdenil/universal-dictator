@@ -134,6 +134,10 @@ public struct TranscriptUpdate: Sendable, Equatable {
     public let isPaused: Bool
     public let isFinished: Bool
     public var text: String { committed + partial }
+
+    public init(committed: String, partial: String, isPaused: Bool, isFinished: Bool) {
+        self.committed = committed; self.partial = partial; self.isPaused = isPaused; self.isFinished = isFinished
+    }
 }
 
 /// One dictation: audio in, transcript updates out. It can be paused and resumed; each resume starts a

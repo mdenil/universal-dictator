@@ -19,7 +19,7 @@ public final class NemotronANEEncoder: NemotronEncoder {
     public private(set) var steps = 0
 
     /// Core ML file names for a latency: (subsampling model or nil, stateful model).
-    static func modelNames(_ schedule: NemotronSchedule) -> (sub: String?, state: String) {
+    public static func modelNames(_ schedule: NemotronSchedule) -> (sub: String?, state: String) {
         let lat = schedule.chunkMs
         return lat == 560 ? ("nemotron_560_steady_sub", "nemotron_560_state_layers") : (nil, "nemotron_\(lat)_state")
     }

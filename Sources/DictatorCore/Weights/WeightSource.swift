@@ -46,23 +46,38 @@ public final class SafeTensorsReader: WeightSource {
 
     public func floats(_ name: String) throws -> [Float] {
         guard let e = entries[name] else { throw EngineError.io("tensor \(name) not in \(url.lastPathComponent)") }
+        guard ["F32", "F16", "BF16"].contains(e.dtype) else { throw EngineError.io("floats(\(name)) dtype \(e.dtype)") }
         let count = e.shape.reduce(1, *)
-        return try data.withUnsafeBytes { raw -> [Float] in
-            let p = raw.baseAddress!.advanced(by: dataStart + e.begin)
-            switch e.dtype {
-            case "F32":
-                var out = [Float](repeating: 0, count: count)
-                out.withUnsafeMutableBytes { $0.copyMemory(from: UnsafeRawBufferPointer(start: p, count: count * 4)) }
-                return out
-            case "F16":
-                let h = p.assumingMemoryBound(to: Float16.self)
-                return (0..<count).map { Float(h[$0]) }
-            case "BF16":
-                let b = p.assumingMemoryBound(to: UInt16.self)
-                return (0..<count).map { Float(bitPattern: UInt32(b[$0]) << 16) }
-            default:
-                throw EngineError.io("floats(\(name)) dtype \(e.dtype)")
+        var out = [Float](repeating: 0, count: count)
+        let offset = dataStart + e.begin
+        let dtype = e.dtype
+        data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            let p = raw.baseAddress!.advanced(by: offset)
+            out.withUnsafeMutableBufferPointer { o in
+                if dtype == "F32" {
+                    memcpy(o.baseAddress!, p, count * 4)
+                } else if dtype == "F16" {
+                    let h = p.assumingMemoryBound(to: UInt16.self)
+                    for i in 0..<count { o[i] = halfToFloat(h[i]) }
+                } else {
+                    let b = p.assumingMemoryBound(to: UInt16.self)
+                    for i in 0..<count { o[i] = Float(bitPattern: UInt32(b[i]) << 16) }
+                }
             }
         }
+        return out
     }
+}
+
+/// IEEE 754 half -> float (no Float16, which Intel builds lack).
+@inline(__always) func halfToFloat(_ h: UInt16) -> Float {
+    let sign = UInt32(h & 0x8000) << 16
+    let exp = Int((h >> 10) & 0x1F), man = UInt32(h & 0x3FF)
+    if exp == 0 {
+        if man == 0 { return Float(bitPattern: sign) }
+        let v = Float(man) * pow(2, -24)                 // subnormal
+        return sign != 0 ? -v : v
+    }
+    if exp == 31 { return Float(bitPattern: sign | 0x7F80_0000 | (man << 13)) }
+    return Float(bitPattern: sign | (UInt32(exp + 112) << 23) | (man << 13))
 }
