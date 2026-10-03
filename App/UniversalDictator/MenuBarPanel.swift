@@ -52,6 +52,8 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         lastClose = Date()
         item.button?.highlight(false)
         controller.panelClosed()
+        // Hand focus back to the app that was in front, so Copy can be followed straight away by ⌘V.
+        NSApp.hide(nil)
     }
 
     func windowDidResignKey(_ notification: Notification) { close() }
