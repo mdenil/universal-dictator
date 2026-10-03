@@ -2,8 +2,8 @@ import Accelerate
 import Foundation
 
 /// RNN-T prediction network (embedding + stacked LSTM) and joint network, run on the CPU with
-/// Accelerate. The encoder side of the joint (`joint.enc`) is applied on the GPU beforehand, so
-/// this only sees 640-wide projected encoder frames.
+/// Accelerate. The encoder side of the joint (`joint.enc`) is applied by the encoder (Metal or Core ML),
+/// so this only sees 640-wide projected encoder frames.
 public final class RNNTDecoder {
     public let hidden: Int          // prediction net / joint hidden size (640)
     public let vocab: Int           // number of outputs including blank (1025)
@@ -28,10 +28,11 @@ public final class RNNTDecoder {
         var pending: (proj: [Float], h: [[Float]], c: [[Float]])?
     }
 
-    public init(weights: SafeTensorsFile, prefix: String = "", maxSymbolsPerFrame: Int = 10) throws {
+    public init(weights: WeightSource, prefix: String = "", maxSymbolsPerFrame: Int = 10) throws {
         let embedE = try weights.floats(prefix + "decoder.prediction.embed.weight")
-        vocab = weights.entries[prefix + "decoder.prediction.embed.weight"]!.shape[0]
-        hidden = weights.entries[prefix + "decoder.prediction.embed.weight"]!.shape[1]
+        guard let embedShape = weights.shape(prefix + "decoder.prediction.embed.weight") else { throw EngineError.io("no RNN-T embedding") }
+        vocab = embedShape[0]
+        hidden = embedShape[1]
         blank = vocab - 1
         embed = embedE
         var l = 0
@@ -69,7 +70,7 @@ public final class RNNTDecoder {
 
     /// One prediction-network step: returns the joint's pred projection (joint.pred applied) and the new state.
     /// Per layer: gates = [W_ih W_hh] · [x; h] + b in a single sgemv, activations via vForce.
-    func predict(token: Int, h: [[Float]], c: [[Float]]) -> (proj: [Float], h: [[Float]], c: [[Float]]) {
+    public func predict(token: Int, h: [[Float]], c: [[Float]]) -> (proj: [Float], h: [[Float]], c: [[Float]]) {
         let H = hidden
         var xh = [Float](repeating: 0, count: 2 * H)
         if token != blank { xh.withUnsafeMutableBufferPointer { p in embed.withUnsafeBufferPointer { e in

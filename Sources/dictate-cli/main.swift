@@ -1,3 +1,4 @@
+import DictatorCore
 import DictatorEngine
 import Foundation
 
@@ -32,11 +33,12 @@ func transcriberFactory(spec: String) throws -> () -> StreamingTranscriber {
         let latency = spec.hasSuffix("560") ? 560 : Int(option("--latency", "160")!)!
         let model = try NemotronModel(modelDir: URL(fileURLWithPath: "models/\(NemoModelKind.nemotron.dirName)"), kind: .nemotron, precision: precision)
         let dir = URL(fileURLWithPath: "models/\(NemoModelKind.nemotron.dirName)")
-        if nemotronUsesANE(modelDir: dir, schedule: NemotronSchedule(lookahead: latency / 80 - 1)) {
+        let schedule = NemotronSchedule(lookahead: latency / 80 - 1)
+        if nemotronUsesANE(modelDir: dir, schedule: schedule) {
+            let assets = ModelAssets(directory: dir)
             return {
-                let s = NemotronStream(model: model, lookahead: latency / 80 - 1)
-                s.ane = try! NemotronANEEncoder(modelDir: dir, schedule: s.schedule)
-                return s
+                NemotronStreamer(encoder: try! NemotronANEEncoder(assets: assets, schedule: schedule),
+                                 decoder: model.decoder, tokenizer: model.tokenizer, frontend: model.frontend)
             }
         }
         return { NemotronStream(model: model, lookahead: latency / 80 - 1) }
@@ -66,8 +68,8 @@ func writeStepLog(_ times: [Double]) throws {
 /// the Core ML models have not been built.
 func nemotronUsesANE(modelDir: URL, schedule: NemotronSchedule) -> Bool {
     guard option("--backend", "ane") == "ane" else { return false }
-    if NemotronANEEncoder.available(modelDir: modelDir, schedule: schedule) { return true }
-    FileHandle.standardError.write("Neural Engine models not found in \(modelDir.path)/coreml; using Metal (build them with reference/coreml/nemotron_ane.py)\n".data(using: .utf8)!)
+    if NemotronANEEncoder.available(assets: ModelAssets(directory: modelDir), schedule: schedule) { return true }
+    FileHandle.standardError.write("Neural Engine models not found in \(modelDir.path)/coreml; using Metal (build them with reference/coreml/nemotron_ane.py --stateful)\n".data(using: .utf8)!)
     return false
 }
 
@@ -107,8 +109,11 @@ do {
         switch kind {
         case .nemotron:
             let latency = Int(option("--latency", "160")!)!
-            let stream = NemotronStream(model: model, lookahead: latency / 80 - 1)
-            if nemotronUsesANE(modelDir: modelDir, schedule: stream.schedule) { stream.ane = try NemotronANEEncoder(modelDir: modelDir, schedule: stream.schedule) }
+            let schedule = NemotronSchedule(lookahead: latency / 80 - 1)
+            let stream = nemotronUsesANE(modelDir: modelDir, schedule: schedule)
+                ? NemotronStreamer(encoder: try NemotronANEEncoder(assets: ModelAssets(directory: modelDir), schedule: schedule),
+                                   decoder: model.decoder, tokenizer: model.tokenizer, frontend: model.frontend)
+                : NemotronStream(model: model, lookahead: schedule.lookahead)
             let mel = model.frontend.features(audio)
             // NeMo's streaming buffer treats every mel frame (including the zeroed last one) as valid.
             stream.runBuffered(mel: mel, frames: audio.count / 160 + 1, validFrames: audio.count / 160 + 1)

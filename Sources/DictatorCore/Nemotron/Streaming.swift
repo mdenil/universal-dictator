@@ -7,6 +7,10 @@ public struct Emission {
     public let token: Int
     public let samplesSeen: Int
     public let computeSeconds: Double
+
+    public init(token: Int, samplesSeen: Int, computeSeconds: Double) {
+        self.token = token; self.samplesSeen = samplesSeen; self.computeSeconds = computeSeconds
+    }
 }
 
 /// Common interface for every streaming transcriber: push audio as it arrives, finish at the end.

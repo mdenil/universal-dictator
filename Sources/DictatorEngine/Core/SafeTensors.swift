@@ -141,3 +141,7 @@ public final class SafeTensorsFile {
         try flush()
     }
 }
+
+extension SafeTensorsFile: WeightSource {
+    public func shape(_ name: String) -> [Int]? { entries[name]?.shape }
+}

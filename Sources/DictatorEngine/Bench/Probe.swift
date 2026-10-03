@@ -120,7 +120,7 @@ extension Probe {
                 let rows = end - cacheStart
                 let slice = UnsafeBufferPointer(rebasing: m[(cacheStart * bins)..<((cacheStart + rows) * bins)])
                 if k == chunk {
-                    let st = stream.state
+                    let st = (stream.encoder as! MetalNemotronEncoder).state
                     let p = st.parity, L = st.leftContext
                     func save(_ name: String, _ ts: [Tensor]) throws {
                         let fl = ts.flatMap { $0.toFloats() }

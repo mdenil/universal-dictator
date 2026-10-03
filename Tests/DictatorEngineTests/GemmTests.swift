@@ -1,3 +1,4 @@
+import DictatorCore
 import Accelerate
 import XCTest
 @testable import DictatorEngine
