@@ -47,14 +47,38 @@ Raw output: `artifacts/timing_m6/`; command: `scratch/m6_timing.sh`.
 - Nemotron step through Core ML: Neural Engine 21.2 ms, Core ML GPU 22.5 ms, CPU 27.4 ms; our Metal 22.8 ms in the same session. Outputs within 7e-3 of the engine.
 - sherpa-onnx (4 CPU threads), same Nemotron 160 ms checkpoint on 20 test-clean utterances: RTF 0.25 int8, 0.96 fp32; ours 0.16.
 
-## Nemotron on the Neural Engine (2026-09-30)
+## Nemotron on the Neural Engine (default backend)
 
-`--backend ane` runs Nemotron's encoder step through Core ML (models from `reference/coreml/nemotron_ane.py`: first-chunk and steady-state shapes, engine masking as inputs, joint encoder projection included); frontend and RNN-T decoding stay on the CPU.
+Nemotron's encoder step runs through Core ML on the Neural Engine by default (`--backend metal` selects the GPU; missing Core ML models fall back to Metal). The frontend and RNN-T decoding stay on the CPU. Models come from `reference/coreml/nemotron_ane.py`:
 
-- Accuracy, first 200 utterances, against Metal on the same utterances: 160 ms 2.05 / 5.73% (Metal 2.10 / 5.77%), 560 ms 1.90 / 5.05% (Metal 1.90 / 5.02%); 4–10% of transcripts differ (fp16), WER unchanged.
-- **560 ms does not run on the Neural Engine**: its models fail the ANE compile (`ANECCompile() FAILED`) and Core ML falls back to the CPU (powermetrics: ANE 0 W, CPU 3.7 W). The 560 ms accuracy above is the CPU fallback's.
-- 160 ms step: 19.0 ms p50 (Metal 23.0 ms). Power, looping a 5-minute file with a warm compile cache: ANE 2.62 W + CPU 2.03 W + GPU 0.12 W = 4.76 W, against Metal's 4.77 W (GPU 3.96 W, CPU 0.81 W). Being faster, it uses about 17% less energy per second of audio. The extra ~1.2 W of CPU is probably input construction and moving the 7 MB of K/V caches each step (next: stateful caches).
-- A Neural Engine compile-cache miss costs about 40 s of CPU at load; the cache was observed to be evicted between runs.
+- **Stateful (default):** one steady-state model per latency with the K/V and conv caches held as Core ML state. The first chunk runs through the same model behind 16 leading zero mel rows masked at every subsampling stage (16 → 8 → 4 → 2 rows, the 2 dropped frames), which reproduces its causal zero padding; on the CPU its outputs match the stateless models to 0.004–0.006 (outputs up to about 1.4).
+- **Stateless (`DICTATOR_ANE_STATELESS=1`):** first-chunk and steady models with the caches passed through inputs and outputs.
+- **560 ms steady step is two models** (subsampling, then layers): the fused graph (65 mel rows → 9 subsampled frames feeding the layers) failed the Neural Engine compile (`ANECCompile() FAILED`) while each half compiled. The disk was nearly full during that bisect, which also breaks Neural Engine compiles, so the fused graph has not been retested with free space.
+
+Measured 2026-09-30, quiet machine:
+
+| | Step p50, 160 ms | Step p50, 560 ms |
+|---|---|---|
+| Neural Engine, stateful | 18.8 ms | 21.4 ms |
+| Neural Engine, stateless | 19.1 ms | 21.4 ms |
+| Metal | 22.1 ms | 36.0 ms |
+
+Accuracy, first 200 utterances, against Metal on the same utterances: 160 ms 2.05 / 5.73% (Metal 2.10 / 5.77%), 560 ms test-other 5.02% (Metal 5.02%). 4–10% of transcripts differ (fp16); stateful and stateless transcripts are identical on the 33.9 s clip at both latencies.
+
+Power (`sudo scripts/power.sh ane`), looping a 5-minute file with a warm compile cache; idle 0.31 W:
+
+| | CPU | GPU | Neural Engine | Total |
+|---|---|---|---|---|
+| 160 ms, Neural Engine, stateful | 1.80 W | 0.10 W | 2.76 W | 4.65 W |
+| 160 ms, Neural Engine, stateless | 1.95 W | 0.08 W | 2.74 W | 4.77 W |
+| 160 ms, Metal | 0.35 W | 3.73 W | 0 W | 4.08 W |
+| 560 ms, Neural Engine, stateful | 1.44 W | 0.07 W | 2.48 W | 3.99 W |
+| 560 ms, Neural Engine, stateless | 1.20 W | 0.07 W | 2.65 W | 3.91 W |
+| 560 ms, Metal | 1.34 W | 6.49 W | 0 W | 7.84 W |
+
+Energy per second of audio (power × step time): 560 ms on the Neural Engine uses about 3.3× less than Metal; 160 ms is within about 3% of Metal. Both leave the GPU free. Stateful caches save about 0.1 W; the Neural Engine path still spends 1.1–1.5 W more CPU than Metal, cause not yet found.
+
+Operational notes: a Neural Engine compile-cache miss costs about 40 s of CPU at model load; the cache is invalidated by a new build of the binary and is evicted when the disk is nearly full (Core ML needs several GB free). An app should load the Core ML model in the background and run on Metal until it is ready.
 
 ## Kept
 

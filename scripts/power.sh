@@ -16,28 +16,35 @@ sample() {  # sample <name> <seconds>
   powermetrics --samplers cpu_power,gpu_power,ane_power -i 1000 -n "$2" > "$O/$1.txt" 2>/dev/null
   chown "$U" "$O/$1.txt"
 }
-run() {  # run <name> <dictate-cli args...>: loop the workload while sampling 30 s
-  local name=$1; shift
-  sudo -u "$U" bash -c "while true; do $B $* >/dev/null 2>&1; done" & local W=$!
+run() {  # run <name> <env assignments or -> <dictate-cli args...>: loop the workload while sampling 30 s
+  local name=$1 envs=$2; shift 2
+  [ "$envs" = "-" ] && envs=""
+  sudo -u "$U" bash -c "${envs:+export $envs; }while true; do $B $* >/dev/null 2>&1; done" & local W=$!
   sleep 3; sample "$name" 30
   kill $W; pkill -u "$U" -f "$B" || true; sleep 2
 }
 
 if [ "$1" = "ane" ]; then
-  # Nemotron 160 ms only: the 560 ms models fail the Neural Engine compile and run on the CPU.
-  # A 5-minute file keeps process start-up out of the window, and a warm-up run fills Core ML's
-  # Neural Engine compile cache (a miss costs about 40 s of CPU).
+  # Nemotron on the Neural Engine (stateful caches, and the stateless models with caches passed through
+  # inputs/outputs) against Metal. A 5-minute file keeps process start-up out of the window, and warm-up
+  # runs fill Core ML's Neural Engine compile cache first (a miss costs about 40 s of CPU).
   L=scratch/long_5min.wav
   echo "warming the Neural Engine compile cache"
-  sudo -u "$U" $B transcribe $C --model nemotron --latency 160 --precision f16 --backend ane >/dev/null 2>&1
+  for lat in 160 560; do
+    sudo -u "$U" $B transcribe $C --model nemotron --latency $lat --precision f16 --backend ane >/dev/null 2>&1
+    sudo -u "$U" env DICTATOR_ANE_STATELESS=1 $B transcribe $C --model nemotron --latency $lat --precision f16 --backend ane >/dev/null 2>&1
+  done
   echo "idle baseline (20 s)"; sample idle-ane 20
-  echo "nemotron-160 on the Neural Engine"; run nemotron-160-ane transcribe $L --model nemotron --latency 160 --precision f16 --backend ane
-  echo "nemotron-160 on Metal";             run nemotron-160-metal transcribe $L --model nemotron --latency 160 --precision f16
+  for lat in 160 560; do
+    echo "nemotron-$lat: Neural Engine, stateful";  run nemotron-$lat-ane-stateful - transcribe $L --model nemotron --latency $lat --precision f16 --backend ane
+    echo "nemotron-$lat: Neural Engine, stateless"; run nemotron-$lat-ane-stateless DICTATOR_ANE_STATELESS=1 transcribe $L --model nemotron --latency $lat --precision f16 --backend ane
+    echo "nemotron-$lat: Metal";                    run nemotron-$lat-metal - transcribe $L --model nemotron --latency $lat --precision f16
+  done
   echo "done: $O"; exit 0
 fi
 echo "idle baseline (20 s)"; sample idle 20
-echo "nemotron-160"; run nemotron-160 transcribe $C --model nemotron --latency 160 --precision f16
-echo "nemotron-560"; run nemotron-560 transcribe $C --model nemotron --latency 560 --precision f16
-echo "parakeet-h4";  run parakeet-h4  transcribe $C --model parakeet --horizon 4 --precision f16
-echo "voxtral-q8h";  run voxtral-q8h  voxtral $C --weights dictator-q8h.safetensors
+echo "nemotron-160"; run nemotron-160 - transcribe $C --model nemotron --latency 160 --precision f16
+echo "nemotron-560"; run nemotron-560 - transcribe $C --model nemotron --latency 560 --precision f16
+echo "parakeet-h4";  run parakeet-h4 - transcribe $C --model parakeet --horizon 4 --precision f16
+echo "voxtral-q8h";  run voxtral-q8h - voxtral $C --weights dictator-q8h.safetensors
 echo "done: $O"

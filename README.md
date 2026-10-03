@@ -34,6 +34,9 @@ reference/nemo/.venv/bin/python reference/nemo/export_weights.py models/parakeet
 ## Use
 
 ```sh
+# Nemotron's encoder runs on the Neural Engine by default; --backend metal uses the GPU. Build its Core ML models with
+#   reference/coreml/.venv/bin/python reference/coreml/nemotron_ane.py              (first-chunk, steady and split models)
+#   reference/coreml/.venv/bin/python reference/coreml/nemotron_ane.py --stateful   (stateful steady models, the default)
 .build/release/dictate-cli transcribe audio.wav --model nemotron --latency 160 --precision f16
 .build/release/dictate-cli transcribe audio.wav --model parakeet --horizon 4 --precision f16
 .build/release/dictate-cli voxtral audio.wav --weights dictator-q8.safetensors

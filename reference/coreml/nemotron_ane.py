@@ -13,7 +13,8 @@ Outputs: enc_proj [T, 640] (encoder output through the joint's encoder projectio
 caches [24, 70, 1024] and conv cache [24, 8, 1024] (fp16), fed back as the next step's inputs.
 
 Usage: reference/coreml/.venv/bin/python reference/coreml/nemotron_ane.py
-Writes models/nemotron-speech-streaming-en-0.6b/coreml/nemotron_{160,560}_{first,steady}.mlpackage
+Writes models/nemotron-speech-streaming-en-0.6b/coreml/nemotron_{160,560}_{first,steady}.mlpackage, except
+the 560 ms steady step, which is split into nemotron_560_steady_{sub,layers}.mlpackage (see convert_split).
 """
 
 import math
@@ -42,9 +43,9 @@ def sinusoid(pos, d=D):
 
 
 class Step(torch.nn.Module):
-    def __init__(self, sd, rows, drop):
+    def __init__(self, sd, rows, drop, nlayers=NL):
         super().__init__()
-        self.R, self.drop = rows, drop
+        self.R, self.drop, self.nl = rows, drop, nlayers
         self.T1, self.T2 = nxt(rows), nxt(nxt(rows))
         self.T3 = nxt(self.T2)
         self.T = self.T3 - drop
@@ -58,7 +59,7 @@ class Step(torch.nn.Module):
         rel = torch.tensor([[(Tk - T) + i - j for j in range(Tk)] for i in range(T)])
         pe = torch.stack([sinusoid(float(r)) for r in range(-(T - 1), Tk)])
         idx = rel + (T - 1)
-        for l in range(NL):
+        for l in range(nlayers):
             P = pe @ self.w(f"encoder.layers.{l}.self_attn.linear_pos.weight").T
             self.register_buffer(f"pg{l}", P[idx].reshape(T, Tk, H, DK).permute(2, 0, 1, 3).contiguous())
 
@@ -66,6 +67,9 @@ class Step(torch.nn.Module):
         return getattr(self, self.names[name])
 
     def forward(self, mel, m0, m1, m2, m3, fmask, kbias, kcache, vcache, convcache):
+        return self.layers(self.subsample(mel, m0, m1, m2, m3), fmask, kbias, kcache, vcache, convcache)
+
+    def subsample(self, mel, m0, m1, m2, m3):
         mt = lambda x, m: x * m[None, None, :, None]
         x = mt(mel[None, None], m0)
         x = mt(F.relu(F.conv2d(F.pad(x, (2, 1, 2, 1)), self.w("encoder.pre_encode.conv.0.weight"), self.w("encoder.pre_encode.conv.0.bias"), stride=2)), m1)
@@ -75,11 +79,13 @@ class Step(torch.nn.Module):
         x = mt(F.relu(F.conv2d(x, self.w("encoder.pre_encode.conv.6.weight"), self.w("encoder.pre_encode.conv.6.bias"))), m3)
         b, c, t, f = x.shape
         x = x.permute(0, 2, 1, 3).reshape(t, c * f)
-        x = F.linear(x, self.w("encoder.pre_encode.out.weight"), self.w("encoder.pre_encode.out.bias"))[self.drop:]
+        return F.linear(x, self.w("encoder.pre_encode.out.weight"), self.w("encoder.pre_encode.out.bias"))[self.drop:]
+
+    def layers(self, x, fmask, kbias, kcache, vcache, convcache):
         T = self.T
         kc, vc, cc = kcache.float(), vcache.float(), convcache.float()
         newk, newv, newc = [], [], []
-        for l in range(NL):
+        for l in range(self.nl):
             p = f"encoder.layers.{l}."
             ln = lambda z, n: F.layer_norm(z, (D,), self.w(p + n + ".weight"), self.w(p + n + ".bias"))
             h = ln(x, "norm_feed_forward1")
@@ -112,28 +118,164 @@ class Step(torch.nn.Module):
         return proj, torch.stack(newk).half(), torch.stack(newv).half(), torch.stack(newc).half()
 
 
-def main():
+def convert(sd, lat, kind, rows, drop, path, nlayers=NL):
     import coremltools as ct
+    m = Step(sd, rows, drop, nlayers).eval()
+    T, Tk = m.T, L + m.T
+    ex = (torch.zeros(rows, MEL), torch.ones(rows), torch.ones(m.T1), torch.ones(m.T2), torch.ones(m.T3), torch.ones(T),
+          torch.zeros(Tk), torch.zeros(nlayers, L, D), torch.zeros(nlayers, L, D), torch.zeros(nlayers, K - 1, D))
+    names = ["mel", "m0", "m1", "m2", "m3", "fmask", "kbias", "kcache", "vcache", "convcache"]
+    with torch.no_grad():
+        traced = torch.jit.trace(m, ex)
+    f16 = {"kcache", "vcache", "convcache"}
+    mlm = ct.convert(traced,
+                     inputs=[ct.TensorType(name=n, shape=t.shape, dtype=np.float16 if n in f16 else np.float32) for n, t in zip(names, ex)],
+                     outputs=[ct.TensorType(name="enc_proj", dtype=np.float32)] + [ct.TensorType(name=n, dtype=np.float16) for n in ["knext", "vnext", "cnext"]],
+                     convert_to="mlprogram", compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.macOS15)
+    mlm.save(str(path))
+    print(f"wrote {path} (rows {rows}, T {T}, layers {nlayers})", flush=True)
+
+
+class SubOnly(torch.nn.Module):
+    def __init__(self, step):
+        super().__init__(); self.s = step
+
+    def forward(self, mel, m0, m1, m2, m3):
+        return self.s.subsample(mel, m0, m1, m2, m3)
+
+
+class LayersOnly(torch.nn.Module):
+    def __init__(self, step):
+        super().__init__(); self.s = step
+
+    def forward(self, x, fmask, kbias, kcache, vcache, convcache):
+        return self.s.layers(x, fmask, kbias, kcache, vcache, convcache)
+
+
+def convert_split(sd, rows, drop, sub_path, layers_path):
+    """The step as two models (subsampling, then the conformer layers): the Neural Engine compiler rejects
+    the fused 560 ms steady graph (65 mel rows -> 9 subsampled frames feeding the layers), while each
+    half compiles."""
+    import coremltools as ct
+    m = Step(sd, rows, drop).eval()
+    T = m.T
+    ex = (torch.zeros(rows, MEL), torch.ones(rows), torch.ones(m.T1), torch.ones(m.T2), torch.ones(m.T3))
+    with torch.no_grad():
+        tr = torch.jit.trace(SubOnly(m).eval(), ex)
+    ct.convert(tr, inputs=[ct.TensorType(name=n, shape=t.shape) for n, t in zip(["mel", "m0", "m1", "m2", "m3"], ex)],
+               outputs=[ct.TensorType(name="x", dtype=np.float32)],
+               convert_to="mlprogram", compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.macOS15).save(str(sub_path))
+    ex = (torch.zeros(T, D), torch.ones(T), torch.zeros(L + T), torch.zeros(NL, L, D), torch.zeros(NL, L, D), torch.zeros(NL, K - 1, D))
+    names = ["x", "fmask", "kbias", "kcache", "vcache", "convcache"]
+    f16 = {"kcache", "vcache", "convcache"}
+    with torch.no_grad():
+        tr = torch.jit.trace(LayersOnly(m).eval(), ex)
+    ct.convert(tr, inputs=[ct.TensorType(name=n, shape=t.shape, dtype=np.float16 if n in f16 else np.float32) for n, t in zip(names, ex)],
+               outputs=[ct.TensorType(name="enc_proj", dtype=np.float32)] + [ct.TensorType(name=n, dtype=np.float16) for n in ["knext", "vnext", "cnext"]],
+               convert_to="mlprogram", compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.macOS15).save(str(layers_path))
+    print(f"wrote {sub_path} and {layers_path} (rows {rows}, T {T})", flush=True)
+
+
+class Stateful(torch.nn.Module):
+    """The steady step with the K/V and conv caches as Core ML state, updated in place each step (no cache
+    copies through inputs/outputs). The first chunk runs through the same model with 16 leading zero mel
+    rows masked at every subsampling stage (16 -> 8 -> 4 -> 2 masked rows, the 2 dropped frames), which
+    reproduces the first chunk's causal zero padding. With `sub=False` it takes the subsampled frames x as
+    input (the layers half of a split step)."""
+
+    def __init__(self, step, sub=True):
+        super().__init__()
+        self.s, self.sub = step, sub
+        self.register_buffer("kstate", torch.zeros(NL, L, D, dtype=torch.float16))
+        self.register_buffer("vstate", torch.zeros(NL, L, D, dtype=torch.float16))
+        self.register_buffer("cstate", torch.zeros(NL, K - 1, D, dtype=torch.float16))
+
+    def forward(self, *a):
+        if self.sub:
+            mel, m0, m1, m2, m3, fmask, kbias = a
+            x = self.s.subsample(mel, m0, m1, m2, m3)
+        else:
+            x, fmask, kbias = a
+        proj, k, v, c = self.s.layers(x, fmask, kbias, self.kstate, self.vstate, self.cstate)
+        self.kstate[:] = k
+        self.vstate[:] = v
+        self.cstate[:] = c
+        return proj
+
+
+def convert_stateful(sd, rows, drop, path, sub=True):
+    import coremltools as ct
+    m = Step(sd, rows, drop).eval()
+    T = m.T
+    st = Stateful(m, sub).eval()
+    if sub:
+        ex = (torch.zeros(rows, MEL), torch.ones(rows), torch.ones(m.T1), torch.ones(m.T2), torch.ones(m.T3), torch.ones(T), torch.zeros(L + T))
+        names = ["mel", "m0", "m1", "m2", "m3", "fmask", "kbias"]
+    else:
+        ex = (torch.zeros(T, D), torch.ones(T), torch.zeros(L + T))
+        names = ["x", "fmask", "kbias"]
+    with torch.no_grad():
+        tr = torch.jit.trace(st, ex)
+    states = [ct.StateType(wrapped_type=ct.TensorType(shape=getattr(st, n).shape, dtype=np.float16), name=n) for n in ["kstate", "vstate", "cstate"]]
+    ct.convert(tr, inputs=[ct.TensorType(name=n, shape=t.shape) for n, t in zip(names, ex)],
+               outputs=[ct.TensorType(name="enc_proj", dtype=np.float32)], states=states,
+               convert_to="mlprogram", compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.macOS15).save(str(path))
+    print(f"wrote {path} (stateful, rows {rows}, T {T})", flush=True)
+
+
+SHAPES = {(160, "first"): (9, 0), (160, "steady"): (25, 2), (560, "first"): (49, 0), (560, "steady"): (65, 2)}
+SPLIT = {(560, "steady")}      # converted as two models (see convert_split)
+
+
+def convert(sd, rows, drop, path, nlayers=NL):
+    import coremltools as ct
+    m = Step(sd, rows, drop, nlayers).eval()
+    T, Tk = m.T, L + m.T
+    ex = (torch.zeros(rows, MEL), torch.ones(rows), torch.ones(m.T1), torch.ones(m.T2), torch.ones(m.T3), torch.ones(T),
+          torch.zeros(Tk), torch.zeros(nlayers, L, D), torch.zeros(nlayers, L, D), torch.zeros(nlayers, K - 1, D))
+    names = ["mel", "m0", "m1", "m2", "m3", "fmask", "kbias", "kcache", "vcache", "convcache"]
+    with torch.no_grad():
+        traced = torch.jit.trace(m, ex)
+    f16 = {"kcache", "vcache", "convcache"}
+    mlm = ct.convert(traced,
+                     inputs=[ct.TensorType(name=n, shape=t.shape, dtype=np.float16 if n in f16 else np.float32) for n, t in zip(names, ex)],
+                     outputs=[ct.TensorType(name="enc_proj", dtype=np.float32)] + [ct.TensorType(name=n, dtype=np.float16) for n in ["knext", "vnext", "cnext"]],
+                     convert_to="mlprogram", compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.macOS15)
+    mlm.save(str(path))
+    print(f"wrote {path} (rows {rows}, T {T}, layers {nlayers})", flush=True)
+
+
+SHAPES = {(160, "first"): (9, 0), (160, "steady"): (25, 2), (560, "first"): (49, 0), (560, "steady"): (65, 2)}
+SPLIT = {(560, "steady")}      # converted as two models (see convert_split)
+
+
+def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--only", help="lat,kind (e.g. 560,steady); default: all four")
+    ap.add_argument("--layers", type=int, default=NL)
+    ap.add_argument("--out", help="output .mlpackage (with --only)")
+    ap.add_argument("--stateful", action="store_true", help="build the stateful steady models (nemotron_<lat>_state*.mlpackage)")
+    a = ap.parse_args()
     sd = load_file(str(MODEL / "nemo_extracted/weights.safetensors"))
     out = MODEL / "coreml"
     out.mkdir(exist_ok=True)
-    for lat, first_rows, steady_rows in [(160, 9, 25), (560, 49, 65)]:
-        for kind, rows, drop in [("first", first_rows, 0), ("steady", steady_rows, 2)]:
-            m = Step(sd, rows, drop).eval()
-            T, Tk = m.T, L + m.T
-            ex = (torch.zeros(rows, MEL), torch.ones(rows), torch.ones(m.T1), torch.ones(m.T2), torch.ones(m.T3), torch.ones(T),
-                  torch.zeros(Tk), torch.zeros(NL, L, D), torch.zeros(NL, L, D), torch.zeros(NL, K - 1, D))
-            names = ["mel", "m0", "m1", "m2", "m3", "fmask", "kbias", "kcache", "vcache", "convcache"]
-            with torch.no_grad():
-                traced = torch.jit.trace(m, ex)
-            f16 = {"kcache", "vcache", "convcache"}
-            mlm = ct.convert(traced,
-                             inputs=[ct.TensorType(name=n, shape=t.shape, dtype=np.float16 if n in f16 else np.float32) for n, t in zip(names, ex)],
-                             outputs=[ct.TensorType(name="enc_proj", dtype=np.float32)] + [ct.TensorType(name=n, dtype=np.float16) for n in ["knext", "vnext", "cnext"]],
-                             convert_to="mlprogram", compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.macOS15)
-            path = out / f"nemotron_{lat}_{kind}.mlpackage"
-            mlm.save(str(path))
-            print(f"wrote {path} (rows {rows}, T {T})", flush=True)
+    if a.stateful:
+        for lat in [160, 560]:
+            rows, drop = SHAPES[(lat, "steady")]
+            if (lat, "steady") in SPLIT:
+                # The subsampling half is the stateless nemotron_<lat>_steady_sub model.
+                convert_stateful(sd, rows, drop, out / f"nemotron_{lat}_state_layers.mlpackage", sub=False)
+            else:
+                convert_stateful(sd, rows, drop, out / f"nemotron_{lat}_state.mlpackage")
+        return
+    todo = [(int(a.only.split(",")[0]), a.only.split(",")[1])] if a.only else list(SHAPES)
+    for lat, kind in todo:
+        rows, drop = SHAPES[(lat, kind)]
+        if (lat, kind) in SPLIT and not a.out:
+            convert_split(sd, rows, drop, out / f"nemotron_{lat}_{kind}_sub.mlpackage", out / f"nemotron_{lat}_{kind}_layers.mlpackage")
+            continue
+        convert(sd, rows, drop, Path(a.out) if a.out else out / f"nemotron_{lat}_{kind}.mlpackage", a.layers)
 
 
 if __name__ == "__main__":

@@ -7,11 +7,18 @@ import Foundation
 /// rows and masked. Outputs the joint's encoder projection, ready for the CPU RNN-T decoder.
 public final class NemotronANEEncoder {
     let first: MLModel, steady: MLModel
+    /// Set when the steady step is split into subsampling + layers models (560 ms; see nemotron_ane.py).
+    let steadySub: MLModel?
     let schedule: NemotronSchedule
     let firstRows: Int, steadyRows: Int
     public let T: Int
     let L = 70, layers = 24, D = 1024, convCache = 8, projDim = 640, melBins = 128
     var kcache: MLMultiArray, vcache: MLMultiArray, ccache: MLMultiArray
+    /// Stateful steady model (caches live in Core ML state, updated in place) and its per-stream state;
+    /// with a split step, `stateModel` is the layers half and `steadySub` computes its input.
+    /// DICTATOR_ANE_STATELESS=1 uses the stateless models (caches through inputs/outputs) instead.
+    let stateModel: MLModel?
+    var mlState: MLState?
     var cacheLen = 0
     public private(set) var steps = 0
 
@@ -19,7 +26,22 @@ public final class NemotronANEEncoder {
         self.schedule = schedule
         let lat = schedule.chunkMs
         first = try Self.load(modelDir, "nemotron_\(lat)_first", computeUnits)
-        steady = try Self.load(modelDir, "nemotron_\(lat)_steady", computeUnits)
+        let dir = modelDir.appendingPathComponent("coreml")
+        if FileManager.default.fileExists(atPath: dir.appendingPathComponent("nemotron_\(lat)_steady_sub.mlpackage").path) {
+            steadySub = try Self.load(modelDir, "nemotron_\(lat)_steady_sub", computeUnits)
+            steady = try Self.load(modelDir, "nemotron_\(lat)_steady_layers", computeUnits)
+        } else {
+            steadySub = nil
+            steady = try Self.load(modelDir, "nemotron_\(lat)_steady", computeUnits)
+        }
+        let stateName = FileManager.default.fileExists(atPath: dir.appendingPathComponent("nemotron_\(lat)_state_layers.mlpackage").path)
+            ? "nemotron_\(lat)_state_layers" : "nemotron_\(lat)_state"
+        if ProcessInfo.processInfo.environment["DICTATOR_ANE_STATELESS"] != "1",
+           FileManager.default.fileExists(atPath: dir.appendingPathComponent(stateName + ".mlpackage").path) {
+            stateModel = try Self.load(modelDir, stateName, computeUnits)
+        } else {
+            stateModel = nil
+        }
         firstRows = schedule.firstChunk
         steadyRows = schedule.preEncodeCache + schedule.chunk
         T = schedule.outFramesPerChunk
@@ -56,15 +78,25 @@ public final class NemotronANEEncoder {
 
     public func reset() {
         for a in [kcache, vcache, ccache] { memset(a.dataPointer, 0, a.count * 2) }
+        mlState = stateModel?.makeState()
         cacheLen = 0
         steps = 0
     }
 
     static func nextLen(_ t: Int) -> Int { t / 2 + 1 }
 
+    /// Whether the Core ML models for this latency exist (built by reference/coreml/nemotron_ane.py).
+    public static func available(modelDir: URL, schedule: NemotronSchedule) -> Bool {
+        let dir = modelDir.appendingPathComponent("coreml"), lat = schedule.chunkMs
+        let names = ["nemotron_\(lat)_first", "nemotron_\(lat)_steady", "nemotron_\(lat)_steady_layers", "nemotron_\(lat)_state", "nemotron_\(lat)_state_layers"]
+        let has = { (n: String) in FileManager.default.fileExists(atPath: dir.appendingPathComponent(n + ".mlpackage").path) }
+        return has(names[0]) && (has(names[1]) || has(names[2]) || has(names[3]) || has(names[4]))
+    }
+
     /// One chunk: mel rows [nRows, 128] (pre-encode cache rows included), the first `validRows` real.
     /// Returns the joint encoder projection [T, 640] and the number of valid output frames.
     public func step(mel: UnsafeBufferPointer<Float>, nRows: Int, validRows: Int) throws -> (proj: [Float], validT: Int) {
+        if let sm = stateModel, let st = mlState { return try statefulStep(sm, st, mel: mel, nRows: nRows, validRows: validRows) }
         let isFirst = steps == 0
         let R = isFirst ? firstRows : steadyRows
         let drop = isFirst ? 0 : schedule.dropExtra
@@ -95,7 +127,16 @@ public final class NemotronANEEncoder {
             "vcache": MLFeatureValue(multiArray: vcache),
             "convcache": MLFeatureValue(multiArray: ccache),
         ]
-        let out = try (isFirst ? first : steady).prediction(from: MLDictionaryFeatureProvider(dictionary: inputs))
+        let out: MLFeatureProvider
+        if !isFirst, let sub = steadySub {
+            let subIn = inputs.filter { ["mel", "m0", "m1", "m2", "m3"].contains($0.key) }
+            let x = try sub.prediction(from: MLDictionaryFeatureProvider(dictionary: subIn)).featureValue(for: "x")!
+            var layerIn = inputs.filter { !["mel", "m0", "m1", "m2", "m3"].contains($0.key) }
+            layerIn["x"] = x
+            out = try steady.prediction(from: MLDictionaryFeatureProvider(dictionary: layerIn))
+        } else {
+            out = try (isFirst ? first : steady).prediction(from: MLDictionaryFeatureProvider(dictionary: inputs))
+        }
         kcache = out.featureValue(for: "knext")!.multiArrayValue!
         vcache = out.featureValue(for: "vnext")!.multiArrayValue!
         ccache = out.featureValue(for: "cnext")!.multiArrayValue!
@@ -112,5 +153,60 @@ public final class NemotronANEEncoder {
         cacheLen = min(cacheLen + T, L)
         steps += 1
         return (proj, validT)
+    }
+
+    static func floats(_ n: Int, _ fill: (Int) -> Float) throws -> MLMultiArray {
+        let a = try MLMultiArray(shape: [NSNumber(value: n)], dataType: .float32)
+        let p = a.dataPointer.assumingMemoryBound(to: Float.self)
+        for i in 0..<n { p[i] = fill(i) }
+        return a
+    }
+
+    func projRows(_ pa: MLMultiArray) -> [Float] {
+        var proj = [Float](repeating: 0, count: T * projDim)
+        let s0 = pa.strides[0].intValue
+        let p = pa.dataPointer.assumingMemoryBound(to: Float.self)
+        for t in 0..<T { for c in 0..<projDim { proj[t * projDim + c] = p[t * s0 + c] } }
+        return proj
+    }
+
+    /// The stateful step. Every chunk uses the steady model; the first chunk's rows sit after
+    /// `lead` = steadyRows - firstRows zero rows that are masked at each subsampling stage (lead, lead/2,
+    /// lead/4, lead/8 rows), which reproduces its causal zero padding; the lead/8 = 2 frames are the
+    /// steady model's dropped frames.
+    func statefulStep(_ sm: MLModel, _ st: MLState, mel: UnsafeBufferPointer<Float>, nRows: Int, validRows: Int) throws -> (proj: [Float], validT: Int) {
+        let isFirst = steps == 0
+        let R = steadyRows
+        let lead = isFirst ? steadyRows - firstRows : 0
+        precondition(nRows <= (isFirst ? firstRows : steadyRows), "chunk of \(nRows) mel rows exceeds the model")
+        precondition(lead % 8 == 0 && lead / 8 == schedule.dropExtra || lead == 0)
+        let v1 = Self.nextLen(validRows), v2 = Self.nextLen(v1), v3 = Self.nextLen(v2)
+        let r1 = Self.nextLen(R), r2 = Self.nextLen(r1), r3 = Self.nextLen(r2)
+        let validT = isFirst ? max(0, min(v3, T)) : max(0, min(v3 - schedule.dropExtra, T))
+        let melA = try MLMultiArray(shape: [NSNumber(value: R), 128], dataType: .float32)
+        let mp = melA.dataPointer.assumingMemoryBound(to: Float.self)
+        memset(mp, 0, R * melBins * 4)
+        memcpy(mp + lead * melBins, mel.baseAddress!, nRows * melBins * 4)
+        let (l0, l1, l2, l3) = (lead, lead / 2, lead / 4, lead / 8)
+        let subIn: [String: MLFeatureValue] = [
+            "mel": MLFeatureValue(multiArray: melA),
+            "m0": MLFeatureValue(multiArray: try Self.floats(R) { $0 >= l0 && $0 < l0 + validRows ? 1 : 0 }),
+            "m1": MLFeatureValue(multiArray: try Self.floats(r1) { $0 >= l1 && $0 < l1 + v1 ? 1 : 0 }),
+            "m2": MLFeatureValue(multiArray: try Self.floats(r2) { $0 >= l2 && $0 < l2 + v2 ? 1 : 0 }),
+            "m3": MLFeatureValue(multiArray: try Self.floats(r3) { $0 >= l3 && $0 < l3 + v3 ? 1 : 0 }),
+        ]
+        var inputs: [String: MLFeatureValue] = [
+            "fmask": MLFeatureValue(multiArray: try Self.floats(T) { $0 < validT ? 1 : 0 }),
+            "kbias": MLFeatureValue(multiArray: try Self.floats(L + T) { j in (j >= L - cacheLen && j < L + validT) ? 0 : -1e4 }),
+        ]
+        if let sub = steadySub {
+            inputs["x"] = try sub.prediction(from: MLDictionaryFeatureProvider(dictionary: subIn)).featureValue(for: "x")!
+        } else {
+            inputs.merge(subIn) { a, _ in a }
+        }
+        let out = try sm.prediction(from: MLDictionaryFeatureProvider(dictionary: inputs), using: st)
+        cacheLen = min(cacheLen + T, L)
+        steps += 1
+        return (projRows(out.featureValue(for: "enc_proj")!.multiArrayValue!), validT)
     }
 }
