@@ -84,6 +84,18 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
             "content fitting \(String(describing: host.fittingSize)), panel \(String(describing: panelFrame()))"
     }
 
+    /// For diagnosing a hidden icon: where the status item's window is, and whether any of it is on screen.
+    func describeIcon() -> String {
+        guard let w = item.button?.window else { return "icon: no window" }
+        let screen = w.screen ?? NSScreen.main
+        let notch = screen.map { s -> String in
+            let l = s.auxiliaryTopLeftArea?.maxX ?? 0, r = s.auxiliaryTopRightArea?.minX ?? 0
+            return "notch x \(Int(l))–\(Int(r))"
+        } ?? "no screen"
+        return "icon frame x \(Int(w.frame.minX))–\(Int(w.frame.maxX)) y \(Int(w.frame.minY)), visible \(w.isVisible), " +
+            "occlusion-visible \(w.occlusionState.contains(.visible)), \(notch)"
+    }
+
     func open(startDictation: Bool = true) {
         guard let frame = panelFrame(), frame.width > 0, frame.height > 0 else { log.error("open: no usable frame"); return }
         let t0 = Date()

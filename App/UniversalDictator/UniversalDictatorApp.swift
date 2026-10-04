@@ -27,7 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                          microphoneQueue: DispatchQueue(label: "microphone", qos: .userInitiated))
         menuBar = MenuBarPanel(controller: controller)
         if CommandLine.arguments.contains("--diagnose-start") {
-            // Twice: open the panel and start a real dictation, time it, close. The microphone runs briefly.
+            // Twice: open the panel and start a real dictation, time it, report the icon's position and whether
+            // it is on screen while listening, close. The microphone runs for about three seconds each time.
             let tLoad = Date()
             controller.loadModel()
             Task { @MainActor in
@@ -37,9 +38,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 for round in 1...2 {
                     let t0 = Date()
                     self.menuBar.open()
+                    FileHandle.standardError.write("round \(round) before open: \(self.menuBar.describeIcon())\n".data(using: .utf8)!)
                     while self.controller.phase != .listening { try? await Task.sleep(for: .milliseconds(5)) }
                     FileHandle.standardError.write("round \(round): open -> listening \(Int(Date().timeIntervalSince(t0) * 1000)) ms\n".data(using: .utf8)!)
-                    try? await Task.sleep(for: .milliseconds(500))
+                    // The microphone indicator appears a moment after the microphone starts.
+                    for i in 1...6 {
+                        try? await Task.sleep(for: .milliseconds(500))
+                        FileHandle.standardError.write("round \(round) listening +\(i * 500) ms: \(self.menuBar.describeIcon())\n".data(using: .utf8)!)
+                    }
                     self.menuBar.close()
                     try? await Task.sleep(for: .milliseconds(800))
                 }
