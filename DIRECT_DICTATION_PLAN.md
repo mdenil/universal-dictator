@@ -10,7 +10,7 @@ The new UI is drafted in Figma under "Direct dictation (draft)": [Universal Dict
 2. **Speak.** Each word is typed into the focused text field as if you had typed it, as soon as it is final. That is about 0.3 s after you start the next word. The word still being recognised is never typed, so nothing ever needs to be erased and retyped.
 3. **Stop**, in one of two modes chosen in Settings:
    - **Toggle** (default): double-tap to start, double-tap again to stop.
-   - **Hold to talk**: tap, then tap and hold; dictation runs while Shift is held, and letting go stops it.
+   - **Hold to talk**: **Shift, Shift-hold (talk), release.** Tap Shift once, press it again and keep holding while you speak; releasing it stops.
 
    Stopping types the last word, turns the microphone off and the icon back to normal.
 4. The dictation goes to History, marked **typed**, so the text is never lost even if it landed in the wrong place.
@@ -95,9 +95,9 @@ The app is signed ad hoc, so macOS treats every build as a new app, and the Acce
 - `DoubleTapDetector`:
   - two Left Shift taps within 0.4 s fire;
   - slower taps, Right Shift, Shift with a letter between, or a click between don't fire;
-  - in Hold to talk, tap then hold fires start, and the release fires stop.
+  - in Hold to talk, Shift then Shift-held (the second press within 0.4 s of the first release) fires start, and releasing it fires stop.
 - Toggle: start → listening, mic on, icon red; words arrive → only finished words typed, in order, with the right spacing; stop → last word typed, mic off, a History entry marked typed.
-- Hold to talk: press starts, release stops.
+- Hold to talk: the second press of the double tap starts, its release stops.
 - Panel open + shortcut → the panel closes by its rules, then direct dictation starts. A paused panel dictation survives a direct dictation.
 - The shortcut while getting ready, or with a permission missing → the panel opens in the matching state, and nothing is typed.
 - Clicking the icon during direct dictation stops it.
