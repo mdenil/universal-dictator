@@ -1,6 +1,6 @@
 # Universal Dictator: windows, History, shortcuts, and typing into a fixed place
 
-This plan covers eight items of feedback. Items 1–7 are fixes and small changes. Item 8 is an investigation with a prototype, and its result decides what gets built. Questions where your answer changes the build are marked **Your call**; each has a recommendation.
+This plan covers eight items of feedback. Items 1–7 are fixes and small changes. Item 8 was dropped. Questions where your answer changes the build are marked **Your call**; each has a recommendation.
 
 The visible changes are drafted in Figma: [Universal Dictator — App UI](https://www.figma.com/design/RYBeO9fxHFk9C7WMtVS6Tl), frame "Round 3 (draft)".
 
@@ -98,37 +98,14 @@ The "Round 3 (draft)" frame shows:
 
 The existing drafts are updated to match once you approve.
 
-## 8. Investigation: keep typing into the same place while you move around
+## 8. Typing into a fixed place while you move around: dropped
 
-**What you want:** start a direct dictation with the cursor in, say, Notes. Then switch to other apps while talking, and the words keep going into Notes, at the same place.
-
-**Why this is hard:** today the app types the way a keyboard does: macOS delivers the keystrokes to whatever app and field are in focus. Typing somewhere else means not typing as a keyboard. There are three ways to do that, each with limits I can't settle without trying them.
-
-| Approach | How | Expected to work in | Expected not to work in |
-|---|---|---|---|
-| **A. Send keystrokes to one app** | Post the keyboard events to the target app's process (`postToPid`) instead of the focused one | Some Cocoa apps (Notes, TextEdit) may accept them while in the background | Apps that ignore input when inactive; probably terminals and browsers. Unknown until tested |
-| **B. Insert into the text field directly** | Remember the focused text field at the start (Accessibility, `AXUIElement`), then insert each word at its cursor (`kAXSelectedTextAttribute`) | Native text fields and editors (Notes, TextEdit, Mail, Messages), whether or not they're in front | Terminals (their text isn't editable this way), and browsers and Electron apps unevenly |
-| **C. Hold the words until you're back** | While the target app isn't in front, keep the words. When you return to it, type them all at once | Everywhere, terminals included, because it's ordinary typing again | Nothing, but the words appear when you come back, not while you're away |
-
-My recommendation: combine them. Use **B** where the target field accepts it, which gives live words even in the background. Use **C** everywhere else, so nothing is lost and terminals work too. A is only worth it if the test shows a clear gain over B.
-
-**The investigation (first step, before building any of it):** a test mode that opens a scratch document in each target app and puts our own test window in front, so the target is in the background. It then tries A and B and checks what arrived:
-- TextEdit and Notes;
-- Chrome (a text box on a local test page);
-- Slack;
-- Terminal and Ghostty, using a scratch shell that discards input.
-
-It needs the Accessibility permission the app already has. Each run takes the focus for a few seconds, so I'll tell you before running it. The result is a table like the one above with **measured** cells instead of expected ones. With that, I'll write the plan for the feature itself (C plus whichever of A or B works) for you to review.
-
-**Questions for later (after the investigation):**
-- Should this always happen, or be a setting ("Type into: the app in front / the app where I started")?
-- With approach C, if you never return to the target app, should the words go to History only (my suggestion), or be pasted when you stop?
+You decided not to pursue this: the ways to type into an app in the background (keystrokes to one app, Accessibility insertion, holding the words until you return) can't do what you want everywhere, terminals especially. Direct dictation keeps typing where the focus is.
 
 ## Order of work
 
 1. Windows (1) and the History changes (2–4), then "Push to talk" (5).
 2. Shortcut kinds (6).
 3. Figma (7): the draft first, so you can review it alongside this plan; the rest after approval.
-4. The investigation (8), then its plan for review.
 
 Each step is committed with its tests passing, and the app is rebuilt and restarted after each.
