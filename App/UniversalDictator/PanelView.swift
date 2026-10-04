@@ -28,8 +28,8 @@ struct PanelView: View {
 
     var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: controller.phase == .listening ? "waveform.badge.mic" : "waveform")
-                .foregroundStyle(controller.phase == .listening ? Color.red : Color.primary)
+            Image(systemName: "waveform")
+                .foregroundStyle(controller.phase == .listening ? Color.red : controller.phase == .paused ? Color.yellow : Color.primary)
             Text("Universal Dictator").font(.system(size: 13, weight: .semibold))
             Spacer()
             Menu {
@@ -81,9 +81,9 @@ struct PanelView: View {
                 .padding(6)
         case .preparing:
             VStack(spacing: 10) {
-                Text("Getting ready…").font(.system(size: 13, weight: .semibold))
+                Text("Getting things ready for you…").font(.system(size: 13, weight: .semibold))
                 ProgressView().controlSize(.small)
-                Text("Preparing the speech model for this Mac’s Neural Engine. This happens once after installing or updating and takes about half a minute. Dictation starts by itself as soon as it’s ready.")
+                Text("This usually takes less than a minute and only happens the first time you open the app.")
                     .font(.system(size: 11)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             .padding(14)
@@ -119,10 +119,7 @@ struct PanelView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                 Spacer()
-                Button(controller.copiedSoFar ? "Copied ✓" : "Copy so far") { controller.copySoFar() }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 12))
-                    .foregroundStyle(controller.copiedSoFar ? Color.green : Color.secondary)
+                Button(action: copyAndClose) { Text("Copy") + Text("  ⌘C").foregroundStyle(.secondary) }
                     .disabled(controller.text.isEmpty)
                 if controller.phase == .listening {
                     Button("Pause") { controller.pause() }.keyboardShortcut(.space, modifiers: [])
@@ -154,17 +151,20 @@ struct PanelView: View {
         }
         .controlSize(.regular)
         .background {
-            // ⌘C while dictating: stop, copy everything and close the panel.
-            Button("") {
-                Task {
-                    await controller.stopAndCopy()
-                    close()
-                }
-            }
-            .keyboardShortcut("c", modifiers: .command)
-            .disabled(controller.phase != .listening && controller.phase != .paused)
-            .opacity(0)
-            .allowsHitTesting(false)
+            // ⌘C while dictating does what the Copy ⌘C button does.
+            Button("", action: copyAndClose)
+                .keyboardShortcut("c", modifiers: .command)
+                .disabled(controller.phase != .listening && controller.phase != .paused)
+                .opacity(0)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// Copy ⌘C: stop, copy everything and close the panel.
+    func copyAndClose() {
+        Task {
+            await controller.stopAndCopy()
+            close()
         }
     }
 

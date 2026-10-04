@@ -134,12 +134,11 @@ enum DevModes {
         c.loadModel(); await settle(); await c.panelOpened()
         f.last?.say("Hi Sarah, thanks for sending the draft over. I’ll take a look this ", "after")
         await settle(); render(c, "1-listening", dir)
-        c.copySoFar(); await settle(); render(c, "2-copied-so-far", dir)
-        c.pause(); await settle(); render(c, "3-paused", dir)
-        await c.stop(); await settle(); render(c, "4-done", dir)
-        (c, _) = make(hang: true); c.loadModel(); await settle(); render(c, "5-preparing", dir)
-        (c, _) = make(granted: false); c.loadModel(); await settle(); await c.panelOpened(); render(c, "6-microphone-denied", dir)
-        (c, _) = make(fail: true); c.loadModel(); await settle(); render(c, "7-failed", dir)
+        c.pause(); await settle(); render(c, "2-paused", dir)
+        await c.stop(); await settle(); render(c, "3-done", dir)
+        (c, _) = make(hang: true); c.loadModel(); await settle(); render(c, "4-preparing", dir)
+        (c, _) = make(granted: false); c.loadModel(); await settle(); await c.panelOpened(); render(c, "5-microphone-denied", dir)
+        (c, _) = make(fail: true); c.loadModel(); await settle(); render(c, "6-failed", dir)
     }
 
     @MainActor static func render(_ c: DictationController, _ name: String, _ dir: URL) {

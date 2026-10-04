@@ -117,6 +117,15 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         close()
     }
 
+    /// A menu-bar symbol: a template (drawn by macOS to suit the menu bar) or in a fixed colour.
+    static func symbol(_ name: String, color: NSColor?) -> NSImage? {
+        guard let base = NSImage(systemSymbolName: name, accessibilityDescription: "Universal Dictator") else { return nil }
+        guard let color else { base.isTemplate = true; return base }
+        let image = base.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [color]))
+        image?.isTemplate = false
+        return image
+    }
+
     /// Keeps the menu-bar icon in step with the dictation (listening, paused, preparing).
     func updateIcon() {
         withObservationTracking {
@@ -125,16 +134,15 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
                 Task { @MainActor [weak self] in self?.controller.panelClosed() }
             }
             log.notice("phase \(String(describing: self.controller.phase), privacy: .public)")
-            let name: String
+            // One shape; the colour tells the state: as the menu bar (idle, getting ready), red (listening),
+            // yellow (paused). Problems that need the user show a warning triangle.
+            let image: NSImage?
             switch controller.phase {
-            case .listening: name = "waveform.badge.mic"
-            case .paused: name = "pause.circle"
-            case .preparing: name = "waveform"           // unchanged while the model gets ready
-            case .microphoneDenied, .failed: name = "exclamationmark.triangle"
-            default: name = "waveform"
+            case .listening: image = Self.symbol("waveform", color: .systemRed)
+            case .paused: image = Self.symbol("waveform", color: .systemYellow)
+            case .microphoneDenied, .failed: image = Self.symbol("exclamationmark.triangle", color: nil)
+            default: image = Self.symbol("waveform", color: nil)
             }
-            let image = NSImage(systemSymbolName: name, accessibilityDescription: "Universal Dictator")
-            image?.isTemplate = true
             item.button?.image = image
         } onChange: {
             Task { @MainActor [weak self] in self?.updateIcon() }

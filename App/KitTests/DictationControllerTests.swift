@@ -124,16 +124,6 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(c.phase, .idle); XCTAssertEqual(c.history.count, 1)
     }
 
-    func testCopySoFarKeepsListening() async {
-        let c = await makeController()
-        await c.panelOpened()
-        factory.sessions[0].say("so far ", "words")
-        await settle()
-        c.copySoFar()
-        XCTAssertEqual(clip.text, "so far words")
-        XCTAssertEqual(c.phase, .listening)
-    }
-
     /// ⌘C while listening: the microphone stops, the whole (final) text is copied, the dictation clears.
     func testStopAndCopy() async {
         let c = await makeController()
