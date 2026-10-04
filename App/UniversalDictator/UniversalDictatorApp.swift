@@ -58,10 +58,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     FileHandle.standardError.write("round \(round) before open: \(self.menuBar.describeIcon())\n".data(using: .utf8)!)
                     while self.controller.phase != .listening { try? await Task.sleep(for: .milliseconds(5)) }
                     FileHandle.standardError.write("round \(round): open -> listening \(Int(Date().timeIntervalSince(t0) * 1000)) ms\n".data(using: .utf8)!)
-                    // The microphone indicator appears a moment after the microphone starts.
+                    // The microphone indicator appears a moment after the microphone starts. In round 1 the
+                    // microphone also goes through its format-change restart halfway (as when a headset switches
+                    // mode); the log shows whether audio kept arriving.
                     for i in 1...6 {
+                        if round == 1, i == 3 {
+                            microphone.restartForDiagnosis()
+                            FileHandle.standardError.write("round 1: forced a microphone restart\n".data(using: .utf8)!)
+                        }
                         try? await Task.sleep(for: .milliseconds(500))
-                        FileHandle.standardError.write("round \(round) listening +\(i * 500) ms: \(self.menuBar.describeIcon())\n".data(using: .utf8)!)
+                        FileHandle.standardError.write("round \(round) listening +\(i * 500) ms: audio blocks \(microphone.blocksDelivered); \(self.menuBar.describeIcon())\n".data(using: .utf8)!)
                     }
                     self.menuBar.close()
                     try? await Task.sleep(for: .milliseconds(800))

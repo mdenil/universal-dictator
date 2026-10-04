@@ -8,8 +8,12 @@ import Foundation
 /// microphone turns on, or the default device changing), macOS stops the engine; the microphone then
 /// restarts itself with the new format and reports it through `onRestart`.
 public final class Microphone {
-    let engine = AVAudioEngine()
-    var converter: AVAudioConverter?
+    /// Rebuilt after a format change: a fresh engine sees the current device and format.
+    var engine = AVAudioEngine()
+    /// The converter for the format the audio actually arrives in (made on the first buffer, and again if the
+    /// format changes), shared with `stop` for the last samples.
+    final class Converter { var conv: AVAudioConverter? }
+    var converter = Converter()
     var onSamples: (([Float]) -> Void)?
     var configObserver: NSObjectProtocol?
     let lock = NSLock()
@@ -17,6 +21,8 @@ public final class Microphone {
     /// Called (on an arbitrary thread) after a format change restarted capture, with the input's new sample
     /// rate, or nil if the restart failed.
     public var onRestart: ((Double?) -> Void)?
+    /// Blocks of audio delivered so far (for diagnostics; read without locking).
+    public private(set) var blocksDelivered = 0
 
     public init() {}
 
@@ -24,21 +30,24 @@ public final class Microphone {
         lock.lock(); defer { lock.unlock() }
         self.onSamples = onSamples
         try installAndStart()
-        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
-                                                                queue: nil) { [weak self] _ in self?.restart() }
     }
 
-    /// The tap and converter for the input's current format, then the engine.
+    /// A tap on the input in whatever format it delivers, then the engine; and a watch for format changes.
     func installAndStart() throws {
         let input = engine.inputNode
-        let fmt = input.outputFormat(forBus: 0)
-        guard fmt.sampleRate > 0, let conv = AVAudioConverter(from: fmt, to: target) else { throw EngineError.io("no converter from \(fmt)") }
-        converter = conv
-        let deliver = onSamples
-        input.installTap(onBus: 0, bufferSize: 1024, format: fmt) { [weak self] buf, _ in
-            guard let self = self else { return }
+        let hw = input.inputFormat(forBus: 0)
+        guard hw.sampleRate > 0, hw.channelCount > 0 else { throw EngineError.io("no microphone input (\(hw))") }
+        let deliver = onSamples, target = self.target
+        let counted: ([Float]) -> Void = { [weak self] x in self?.blocksDelivered += 1; deliver?(x) }
+        let box = Converter()
+        converter = box
+        // format nil: the tap takes the node's own format, so it can't mismatch the hardware.
+        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { buf, _ in
+            let fmt = buf.format
+            if box.conv?.inputFormat != fmt { box.conv = AVAudioConverter(from: fmt, to: target) }
+            guard let conv = box.conv else { return }
             let cap = AVAudioFrameCount(Double(buf.frameLength) * 16000 / fmt.sampleRate) + 16
-            guard let out = AVAudioPCMBuffer(pcmFormat: self.target, frameCapacity: cap) else { return }
+            guard let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: cap) else { return }
             var fed = false
             var err: NSError?
             conv.convert(to: out, error: &err) { _, status in
@@ -48,22 +57,34 @@ public final class Microphone {
                 return buf
             }
             if out.frameLength > 0 {
-                deliver?(Array(UnsafeBufferPointer(start: out.floatChannelData![0], count: Int(out.frameLength))))
+                counted(Array(UnsafeBufferPointer(start: out.floatChannelData![0], count: Int(out.frameLength))))
             }
         }
         try engine.start()
+        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine,
+                                                                queue: nil) { [weak self] _ in self?.restart() }
     }
 
-    /// The input's format changed and the engine stopped: capture again with the new format.
+    func teardown() {
+        if let o = configObserver { NotificationCenter.default.removeObserver(o); configObserver = nil }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+    }
+
+    /// Runs the format-change restart now (for `--diagnose-start`, which checks audio keeps arriving).
+    public func restartForDiagnosis() { restart() }
+
+    /// The input's format changed (a headset switched mode, or the device changed) and the engine stopped:
+    /// capture again on a fresh engine.
     func restart() {
         lock.lock()
         guard onSamples != nil else { lock.unlock(); return }                 // stopped meanwhile
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        teardown()
+        engine = AVAudioEngine()
         let rate: Double?
         do {
             try installAndStart()
-            rate = engine.inputNode.outputFormat(forBus: 0).sampleRate
+            rate = engine.inputNode.inputFormat(forBus: 0).sampleRate
         } catch {
             rate = nil
         }
@@ -75,10 +96,8 @@ public final class Microphone {
     /// (on the calling thread) before this returns, so nothing said before the stop is lost.
     public func stop() {
         lock.lock(); defer { lock.unlock() }
-        if let o = configObserver { NotificationCenter.default.removeObserver(o); configObserver = nil }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        if let conv = converter, let deliver = onSamples, let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: 4096) {
+        teardown()
+        if let conv = converter.conv, let deliver = onSamples, let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: 4096) {
             var err: NSError?
             conv.convert(to: out, error: &err) { _, status in
                 status.pointee = .endOfStream
@@ -88,7 +107,7 @@ public final class Microphone {
                 deliver(Array(UnsafeBufferPointer(start: out.floatChannelData![0], count: Int(out.frameLength))))
             }
         }
-        converter = nil
+        converter = Converter()
         onSamples = nil
     }
 }
