@@ -6,11 +6,11 @@ The new UI is drafted in Figma under "Direct dictation (draft)": [Universal Dict
 
 ## What it does
 
-1. **Press the shortcut** (default **⌃⌥D**) while typing in any app: the menu-bar icon turns red and the microphone starts. No window opens.
+1. **Double-tap Left Shift** (the default shortcut) while typing in any app: the menu-bar icon turns red and the microphone starts. No window opens.
 2. **Speak.** Each word is typed into the focused text field as if you had typed it, as soon as it is final. That is about 0.3 s after you start the next word. The word still being recognised is never typed, so nothing ever needs to be erased and retyped.
 3. **Stop**, in one of two modes chosen in Settings:
-   - **Toggle** (default): press the shortcut again.
-   - **Hold to talk**: hold the shortcut while speaking; releasing it stops.
+   - **Toggle** (default): double-tap to start, double-tap again to stop.
+   - **Hold to talk**: tap, then tap and hold; dictation runs while Shift is held, and letting go stops it.
 
    Stopping types the last word, turns the microphone off and the icon back to normal.
 4. The dictation goes to History, marked **typed**, so the text is never lost even if it landed in the wrong place.
@@ -25,8 +25,11 @@ The app sends each word as keyboard events carrying the text (`CGEvent` with a U
   - Words are typed with the spacing the model gives them.
   - The first word of a dictation gets no leading space, so the text starts exactly at the cursor.
   - Each later word starts with a space.
-- **Accessibility permission:** sending keystrokes to other apps needs macOS's Accessibility permission, which you grant once. Until it's granted, pressing the shortcut opens the panel with a "needs permission" state (Figma, panel state 6). It has an **Open System Settings** button that goes straight to Privacy & Security › Accessibility.
-- **Password fields and "secure keyboard entry":** macOS blocks typed events while secure input is on. That covers password fields and apps with "secure keyboard entry", such as Terminal's option of that name or some password managers. If secure input is on when the shortcut is pressed, dictation doesn't start and the icon shows the warning triangle for a moment.
+- **Accessibility permission:** both typing into other apps and noticing a double tap of Shift in other apps need macOS's Accessibility permission, which you grant once.
+  - The app asks once, at the first launch after this feature ships. It uses macOS's own prompt, which leads to System Settings.
+  - Until the permission is granted, the double tap can't be noticed at all, so nothing happens. The Settings row shows **Allow…**.
+  - With a key-combination shortcut instead (see Settings), pressing it without the permission opens the panel in a "Typing in other apps is off" state (Figma, "Direct dictation (draft)" 4). Its **Open System Settings** button goes straight to Privacy & Security › Accessibility.
+- **Password fields and "secure keyboard entry":** macOS blocks typed events while secure input is on. That covers password fields and apps with "secure keyboard entry", such as Terminal's option of that name or some password managers. If secure input is on when the shortcut is used, dictation doesn't start and the icon shows the warning triangle for a moment.
 
 ## How it fits with the panel
 
@@ -35,8 +38,9 @@ The app sends each word as keyboard events carrying the text (`CGEvent` with a U
 | Nothing running | Starts direct dictation |
 | Panel open (listening, stopped, any state) | Closes the panel by the usual rules (listening ends, paused is kept), then starts direct dictation into the app in front |
 | A paused panel dictation waiting (panel closed) | Starts direct dictation; the paused one is untouched and still there on the next click |
-| Model getting ready | Opens the panel's Getting-ready state; press the shortcut again once it's ready |
-| Microphone or Accessibility permission missing | Opens the panel's permission state |
+| Model getting ready | Opens the panel's Getting-ready state; use the shortcut again once it's ready |
+| Microphone permission missing | Opens the panel's microphone state |
+| Accessibility permission missing | With a key combination: opens the panel's "Typing in other apps is off" state. With a double tap: nothing, since the tap can't be noticed without the permission |
 
 Clicking the menu-bar icon during direct dictation stops it, typing the last word, and doesn't open the panel. The right-click menu works as today.
 
@@ -48,22 +52,24 @@ New rows under the existing ones, in the same layout: labels left, controls righ
 
 | Label | Control |
 |---|---|
-| Shortcut | a shortcut field showing **⌃⌥D**. Click it, then press the new keys; Esc cancels. A shortcut needs ⌘, ⌃ or ⌥, or is a function key (F1–F19). |
+| Shortcut | a shortcut field showing **Double Left ⇧** by default. Click it, then either double-tap a modifier key (Left or Right Shift, Control, Option or Command) or press a key combination; Esc cancels. A key combination needs ⌘, ⌃ or ⌥, or is a function key (F1–F19). |
 | Mode | a menu: **Toggle** or **Hold to talk** |
 | Accessibility | **Allowed ✓** once granted, otherwise an **Allow…** button that opens the right System Settings page |
 
-**Your call: the default shortcut.**
-- **⌃⌥D (recommended):** D for dictate, and as far as I know nothing in macOS uses it.
-- **⌃⌥Space:** easier to hit, but macOS uses it to switch keyboard input sources when more than one is set up.
-- **Fn (Globe):** macOS's own dictation key. Catching it needs a different mechanism that macOS treats as monitoring the keyboard, so it means a second permission. Not in the first version.
+**Double tap, precisely:**
+- Two presses of Left Shift, each released, within 0.4 s.
+- No other key and no mouse click in between, so Shift-typing capitals ("AB") or Shift-clicking never triggers it.
+- Right Shift doesn't count, so Right Shift stays free for ordinary typing.
+
+**One clash to know about:** JetBrains IDEs (IntelliJ, PyCharm, and others) use double Shift for Search Everywhere. The app only listens to keys and can't swallow them, so in those IDEs both would happen. A key-combination shortcut avoids it.
 
 ## Open question to settle in the first step: holding modifier keys while typing
 
-In Hold to talk mode, ⌃ and ⌥ are physically held down while words are being typed. If a receiving app reads which keys are held, rather than the keys carried in the typed event, a typed "s" could act as ⌃⌥S, a shortcut. I don't know which apps do this. It has to be tested before anything else is built.
+In Hold to talk mode, Shift (or the modifiers of a key-combination shortcut) is physically held down while words are being typed. If a receiving app reads which keys are held, rather than the keys carried in the typed event, typed words could come out in capitals, or a typed "s" could act as a shortcut. I don't know which apps do this. It has to be tested before anything else is built.
 
-- **Test:** with ⌃⌥ held, type into TextEdit, Chrome, Slack, Notes and Terminal, and check the text arrives as plain text.
+- **Test:** with Shift held, and with ⌃⌥ held, type into TextEdit, Chrome, Slack, Notes and Terminal, and check the text arrives exactly as sent.
 - **If it's safe:** Hold to talk types word by word, like Toggle.
-- **If it isn't:** in Hold to talk mode the words are held back and typed the moment you release the shortcut. That's still quick, but they don't appear while you speak. I'll report back before choosing.
+- **If it isn't:** in Hold to talk mode the words are held back and typed the moment you let go. That's still quick, but they don't appear while you speak. I'll report back before choosing.
 
 ## A development snag: permission after every rebuild
 
@@ -71,7 +77,12 @@ The app is signed ad hoc, so macOS treats every build as a new app, and the Acce
 
 ## Build
 
-- **`HotkeyCenter`** (app): registers the shortcut with the system's global hotkey call (`RegisterEventHotKey`), which needs no permission, and reports presses and releases. It re-registers when Settings changes the shortcut.
+- **`HotkeyCenter`** (app) reports "start" and "stop" from either kind of shortcut:
+  - **A double tap of a modifier:** it watches modifier-key changes with a global event monitor, which needs Accessibility, plus a local one for when the app's own windows have focus. It tells Left from Right Shift by key code, and resets on any other key or a mouse click.
+  - **A key combination:** it uses the system's global hotkey call (`RegisterEventHotKey`), which needs no permission.
+
+  It re-registers when Settings changes the shortcut.
+- **`DoubleTapDetector`** (Kit): the timing and reset rules above as plain logic, fed key events, so it can be tested without a keyboard.
 - **`TextTyper`** (Kit protocol): `type(_ text: String)`. The app's version posts `CGEvent` keyboard events with the text, in pieces of up to 20 characters (the most one event carries). Tests use a fake that records what was typed.
 - **`DirectDictation`** (Kit): starts a session on the loaded model and the microphone. It types each newly finished word as updates arrive, and on stop types the last word, archives the text (marked typed) and turns the microphone off. Toggle and Hold to talk differ only in which hotkey events start and stop it. It shares the model, the microphone queue and History with the panel's `DictationController`, and keeps to the rules in the table above.
 - **Settings:** a shortcut field, a Mode menu, and an Accessibility row. They're stored in UserDefaults like the model and the history length.
@@ -81,7 +92,11 @@ The app is signed ad hoc, so macOS treats every build as a new app, and the Acce
 ## Tests
 
 **Logic (fakes):**
-- Toggle: press → listening, mic on, icon red; words arrive → only finished words typed, in order, with the right spacing; press → last word typed, mic off, a History entry marked typed.
+- `DoubleTapDetector`:
+  - two Left Shift taps within 0.4 s fire;
+  - slower taps, Right Shift, Shift with a letter between, or a click between don't fire;
+  - in Hold to talk, tap then hold fires start, and the release fires stop.
+- Toggle: start → listening, mic on, icon red; words arrive → only finished words typed, in order, with the right spacing; stop → last word typed, mic off, a History entry marked typed.
 - Hold to talk: press starts, release stops.
 - Panel open + shortcut → the panel closes by its rules, then direct dictation starts. A paused panel dictation survives a direct dictation.
 - The shortcut while getting ready, or with a permission missing → the panel opens in the matching state, and nothing is typed.
@@ -93,7 +108,7 @@ The app is signed ad hoc, so macOS treats every build as a new app, and the Acce
 
 ## Order of work
 
-1. The modifier-key test, using a throwaway typing prototype. I'll report the result, which decides how Hold to talk types.
+1. The held-modifier test (Shift and ⌃⌥), using a throwaway typing prototype. I'll report the result, which decides how Hold to talk types.
 2. `TextTyper`, `DirectDictation` and the hotkey in Toggle mode, with tests and the end-to-end self-test.
 3. Hold to talk.
 4. Settings rows, the permission panel state, and "typed" in History.
