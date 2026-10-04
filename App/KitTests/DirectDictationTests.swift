@@ -11,9 +11,32 @@ final class FakeTyper: TextTyper, @unchecked Sendable {
 final class FakeAccessibility: AccessibilityPermission { var isGranted = true }
 
 final class DoubleTapDetectorTests: XCTestCase {
+    /// The double-tap outputs (single taps left out; `taps` counts them).
     func run(_ events: [DoubleTapDetector.Event], key: ModifierKey = .leftShift) -> [DoubleTapDetector.Output] {
         var d = DoubleTapDetector(key: key)
-        return events.compactMap { d.handle($0) }
+        return events.compactMap { d.handle($0) }.filter { $0 != .tap }
+    }
+
+    func taps(_ events: [DoubleTapDetector.Event]) -> Int {
+        var d = DoubleTapDetector(key: .leftShift)
+        return events.compactMap { d.handle($0) }.filter { $0 == .tap }.count
+    }
+
+    /// Toggle stops with one tap: a quick press and release, with nothing in between.
+    func testSingleTap() {
+        XCTAssertEqual(taps([.modifierDown(.leftShift, at: 0), .modifierUp(.leftShift, at: 0.1)]), 1)
+        XCTAssertEqual(taps([.modifierDown(.leftShift, at: 0), .modifierUp(.leftShift, at: 0.9)]), 0)       // held: not a tap
+        XCTAssertEqual(taps([.modifierDown(.leftShift, at: 0), .other, .modifierUp(.leftShift, at: 0.1)]), 0)   // typing a capital
+        XCTAssertEqual(taps([.modifierDown(.rightShift, at: 0), .modifierUp(.rightShift, at: 0.1)]), 0)
+    }
+
+    /// After a tap is used (to stop), a quick second press doesn't count as a double tap.
+    func testResetAfterATap() {
+        var d = DoubleTapDetector(key: .leftShift)
+        _ = d.handle(.modifierDown(.leftShift, at: 0))
+        XCTAssertEqual(d.handle(.modifierUp(.leftShift, at: 0.1)), .tap)
+        d.reset()
+        XCTAssertNil(d.handle(.modifierDown(.leftShift, at: 0.2)))
     }
 
     func testTwoQuickTapsFire() {

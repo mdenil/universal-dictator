@@ -133,6 +133,11 @@ public final class DictationController {
     var tick: Timer?
     /// A stop is waiting for the microphone and the session to finish.
     var stopping = false
+    /// Whether the microphone is actually capturing: it takes a moment (sometimes seconds) to wake after
+    /// starting. The menu-bar icon turns red only then.
+    public private(set) var isMicrophoneLive = false
+    /// Counts microphone starts and stops, so a start that finishes after a later stop doesn't count as live.
+    var microphoneGeneration = 0
 
     /// Where the microphone is started and stopped. Starting can take a second or two (waking the audio
     /// device), so the app passes a serial background queue and the panel draws at once; starts and stops
@@ -335,6 +340,8 @@ public final class DictationController {
         var lastLevel = Date.distantPast
         let mic = microphone
         let t0 = Date()
+        microphoneGeneration += 1
+        let generation = microphoneGeneration
         let onSamples: ([Float]) -> Void = { [weak self] samples in
             s.push(samples)
             guard timed else { return }
@@ -353,6 +360,10 @@ public final class DictationController {
                 do {
                     try mic.start(onSamples)
                     timing.notice("microphone started in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+                    Task { @MainActor in
+                        guard let self, self.microphoneGeneration == generation else { return }
+                        self.isMicrophoneLive = true
+                    }
                 } catch {
                     Task { @MainActor in
                         guard let self, self.session === s else { return }
@@ -363,6 +374,7 @@ public final class DictationController {
             }
         } else {
             try mic.start(onSamples)
+            isMicrophoneLive = true
         }
         guard timed else { return }
         listenStart = Date()
@@ -378,6 +390,8 @@ public final class DictationController {
     @discardableResult
     func stopMicrophone(timed: Bool = true, wait: Bool = false) -> Task<Void, Never> {
         let mic = microphone
+        microphoneGeneration += 1
+        isMicrophoneLive = false
         let stopped: Task<Void, Never>
         if let q = microphoneQueue {
             if wait {

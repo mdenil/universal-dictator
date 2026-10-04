@@ -89,6 +89,8 @@ final class HotkeyCenter {
     let settings: DirectSettings
     var onDown: () -> Void = {}
     var onUp: () -> Void = {}
+    /// A single tap of the double-tap key; returns true if it was used (then it can't begin a double tap).
+    var onTap: () -> Bool = { false }
 
     var detector: DoubleTapDetector?
     var monitors: [Any] = []
@@ -172,6 +174,7 @@ final class HotkeyCenter {
         let out = d.handle(Self.detectorEvent(e))
         detector = d
         switch out {
+        case .tap: if onTap() { detector?.reset() }
         case .doubleTapDown: onDown()
         case .doubleTapUp: onUp()
         case nil: break

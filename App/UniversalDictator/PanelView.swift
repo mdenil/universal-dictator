@@ -35,7 +35,8 @@ struct PanelView: View {
     var header: some View {
         HStack(spacing: 8) {
             Image(systemName: "waveform")
-                .foregroundStyle(controller.phase == .listening ? Color.red : controller.phase == .paused ? Color.yellow : Color.primary)
+                .foregroundStyle(controller.phase == .listening && controller.isMicrophoneLive ? Color.red
+                                 : controller.phase == .paused ? Color.yellow : Color.primary)
             Text("Universal Dictator").font(.system(size: 13, weight: .semibold))
             Spacer()
         }

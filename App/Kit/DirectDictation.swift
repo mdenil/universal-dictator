@@ -79,7 +79,9 @@ public struct DoubleTapDetector {
     }
 
     public enum Output: Equatable {
-        /// The second press: a double tap (Toggle acts on this; Hold to talk starts).
+        /// A single quick press and release (Toggle stops a running dictation with it).
+        case tap
+        /// The second press: a double tap (Toggle starts with it; Hold to talk starts).
         case doubleTapDown
         /// The release of that second press (Hold to talk stops).
         case doubleTapUp
@@ -92,6 +94,9 @@ public struct DoubleTapDetector {
     var state = State.idle
 
     public init(key: ModifierKey) { self.key = key }
+
+    /// Forgets any tap in progress (after a tap has been used, so it can't start a double tap).
+    public mutating func reset() { state = .idle }
 
     public mutating func handle(_ event: Event) -> Output? {
         switch event {
@@ -112,8 +117,9 @@ public struct DoubleTapDetector {
             guard k == key else { state = .idle; return nil }
             switch state {
             case .firstDown(let down):
-                state = t - down <= interval ? .firstUp(t) : .idle
-                return nil
+                guard t - down <= interval else { state = .idle; return nil }
+                state = .firstUp(t)
+                return .tap
             case .secondDown:
                 state = .idle
                 return .doubleTapUp

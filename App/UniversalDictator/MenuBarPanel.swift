@@ -183,6 +183,13 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         }
     }
 
+    /// A single tap of the double-tap key: in Toggle mode it stops a running direct dictation. True if used.
+    func shortcutTap() -> Bool {
+        guard direct.mode == .toggle, controller.isDirectDictating else { return false }
+        Task { await controller.stopDirectDictation() }
+        return true
+    }
+
     func shortcutUp() {
         shortcutHeld = false
         if direct.mode == .holdToTalk, controller.isDirectDictating { Task { await controller.stopDirectDictation() } }
@@ -288,6 +295,10 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         return image
     }
 
+    var wasLive = false
+    /// Played when a direct dictation's microphone goes live.
+    static let liveSound = NSSound(named: "Tink")
+
     /// Keeps the menu-bar icon in step with the dictation (listening, paused, preparing).
     func updateIcon() {
         withObservationTracking {
@@ -299,8 +310,12 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
             // One shape; the colour tells the state: as the menu bar (idle, getting ready), red (listening),
             // yellow (paused). Problems that need the user show a warning triangle.
             let image: NSImage?
+            // Red only once the microphone is actually live (it takes a moment to wake), so red means "speak".
+            let live = controller.isMicrophoneLive
+            if live, !wasLive, controller.isDirectDictating { Self.liveSound?.play() }   // no window to look at
+            wasLive = live
             switch controller.isDirectDictating ? .listening : controller.phase {
-            case .listening: image = Self.symbol("waveform", color: .systemRed)
+            case .listening: image = Self.symbol("waveform", color: live ? .systemRed : nil)
             case .paused: image = Self.symbol("waveform", color: .systemYellow)
             case .microphoneDenied, .accessibilityNeeded, .failed: image = Self.symbol("exclamationmark.triangle", color: nil)
             default: image = Self.symbol("waveform", color: nil)

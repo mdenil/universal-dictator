@@ -547,4 +547,27 @@ final class DictationControllerTests: XCTestCase {
         await c.stopDirectDictation()
         XCTAssertEqual(factory.sessions[0].latePushes, 0); XCTAssertEqual(factory.sessions[0].pushed, 1600)
     }
+
+    /// The microphone counts as live only once it has started (the icon turns red then), and not after a stop,
+    /// even if a slow start finishes later.
+    func testMicrophoneLiveOnlyOnceStarted() async {
+        final class SlowMic: AudioInput, @unchecked Sendable {
+            func start(_ onSamples: @escaping ([Float]) -> Void) throws { usleep(150_000) }
+            func stop() {}
+        }
+        let c = DictationController(model: .nemotron160, loader: FakeLoader(factory: factory), microphone: SlowMic(), permission: FakePermission(),
+                                    clipboard: clip, microphoneQueue: DispatchQueue(label: "test-mic"))
+        c.loadModel()
+        for _ in 0..<50 where c.phase == .preparing { try? await Task.sleep(for: .milliseconds(5)) }
+        await c.panelOpened()
+        XCTAssertEqual(c.phase, .listening); XCTAssertFalse(c.isMicrophoneLive)
+        try? await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(c.isMicrophoneLive)
+        await c.stop()
+        XCTAssertFalse(c.isMicrophoneLive)
+        await c.newDictation()                                  // starts slowly again; closed before it's live
+        c.panelClosed()
+        try? await Task.sleep(for: .milliseconds(300))
+        XCTAssertFalse(c.isMicrophoneLive)
+    }
 }

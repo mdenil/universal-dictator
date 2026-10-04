@@ -6,10 +6,10 @@ The new UI is drafted in Figma under "Direct dictation (draft)": [Universal Dict
 
 ## What it does
 
-1. **Double-tap Left Shift** (the default shortcut) while typing in any app: the menu-bar icon turns red and the microphone starts. No window opens.
+1. **Double-tap Left Shift** (the default shortcut) while typing in any app. The microphone starts; when it is live, a moment later, the menu-bar icon turns red and a short sound plays ("Tink"). Speak then. No window opens.
 2. **Speak.** Each word is typed into the focused text field as if you had typed it, as soon as it is final. That is about 0.3 s after you start the next word. The word still being recognised is never typed, so nothing ever needs to be erased and retyped.
 3. **Stop**, in one of two modes chosen in Settings:
-   - **Toggle** (default): double-tap to start, double-tap again to stop.
+   - **Toggle** (default): double-tap to start, a single tap of Shift to stop. A key-combination shortcut stops with a second press.
    - **Hold to talk**: **Shift, Shift-hold (talk), release.** Tap Shift once, press it again and keep holding while you speak; releasing it stops.
 
    Stopping types the last word, turns the microphone off and the icon back to normal.
@@ -83,7 +83,8 @@ The app is signed with the Apple Development certificate (team QF8GKSXVE2), so m
 - **`DirectDictation`** (Kit): starts a session on the loaded model and the microphone. It types each newly finished word as updates arrive, and on stop types the last word, archives the text (marked typed) and turns the microphone off. Toggle and Hold to talk differ only in which hotkey events start and stop it. It shares the model, the microphone queue and History with the panel's `DictationController`, and keeps to the rules in the table above.
 - **Settings:** a shortcut field, a Mode menu, and an Accessibility row. They're stored in UserDefaults like the model and the history length.
 - **History:** `HistoryEntry` gains `typed`, and the History window shows it as "· typed".
-- **Icon:** red while direct dictation listens, the same as panel listening, with no new shape or colour.
+- **Icon and sound:** the icon turns red once the microphone is live (`DictationController.isMicrophoneLive`), not when it is asked to start. That applies to the panel too. A direct dictation also plays the system sound "Tink" at that moment.
+- **Stopping keeps the last word:** every stop waits until the microphone has stopped and handed over its last audio before the session finishes.
 
 ## Tests
 

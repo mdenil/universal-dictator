@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeys = HotkeyCenter(settings: direct)
         hotkeys.onDown = { [weak self] in self?.menuBar.shortcutDown() }
         hotkeys.onUp = { [weak self] in self?.menuBar.shortcutUp() }
+        hotkeys.onTap = { [weak self] in self?.menuBar.shortcutTap() ?? false }
         if CommandLine.arguments.contains("--diagnose-start") {
             // Twice: open the panel and start a real dictation, time it, report the icon's position and whether
             // it is on screen while listening, close. The microphone runs for about three seconds each time.
