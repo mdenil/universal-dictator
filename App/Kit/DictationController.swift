@@ -206,6 +206,7 @@ public final class DictationController {
         case .idle: await start()
         case .preparing: startWhenReady = true
         case .microphoneDenied: if permission.isGranted { phase = .idle; await start() }
+        case .failed where isModelReady: phase = .idle; await start()      // the microphone failed last time: try again
         default: break
         }
     }
@@ -370,10 +371,15 @@ public final class DictationController {
                     try mic.start(onSamples)
                     timing.notice("microphone started in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
                 } catch {
+                    timing.error("microphone failed to start: \(String(describing: error), privacy: .public)")
                     Task { @MainActor in
-                        guard let self, self.session === s else { return }
-                        self.stopMicrophone()
-                        self.phase = .failed("Couldn’t start the microphone: \(error)")
+                        guard let self else { return }
+                        if self.session === s {
+                            self.stopMicrophone()
+                            self.phase = .failed("Couldn’t start the microphone: \(error)")
+                        } else if self.directSession === s {
+                            self.microphoneFailedDuringDirectDictation()
+                        }
                     }
                 }
             }
@@ -558,6 +564,22 @@ public final class DictationController {
         typer.type(new)
         directTyped += new
     }
+
+    /// The direct dictation's microphone couldn't start: the dictation ends (nothing was heard) and
+    /// `directDictationFailed` is set for a moment, so the app can show it.
+    func microphoneFailedDuringDirectDictation() {
+        guard isDirectDictating else { return }
+        isDirectDictating = false
+        stopMicrophone(timed: false)
+        directUpdates?.cancel()
+        directSession = nil
+        directTyped = ""
+        directDictationFailed = true
+        Task { try? await Task.sleep(for: .seconds(2)); directDictationFailed = false }
+    }
+
+    /// Briefly true after a direct dictation's microphone failed to start (the icon shows a warning).
+    public private(set) var directDictationFailed = false
 
     /// The shortcut was used before Accessibility was allowed: the panel (which the app opens) explains.
     public func showAccessibilityNeeded() {

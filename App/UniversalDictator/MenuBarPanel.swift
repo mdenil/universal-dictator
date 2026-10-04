@@ -316,7 +316,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
                 log.notice("direct dictation live: sound \(played ? "played" : "failed", privacy: .public) on \(StartSound.outputDescription(), privacy: .public)")
             }
             wasLive = live
-            switch controller.isDirectDictating ? .listening : controller.phase {
+            switch controller.directDictationFailed ? .microphoneDenied : controller.isDirectDictating ? .listening : controller.phase {
             case .listening: image = Self.symbol("waveform", color: live ? .systemRed : nil)
             case .paused: image = Self.symbol("waveform", color: .systemYellow)
             case .microphoneDenied, .accessibilityNeeded, .failed: image = Self.symbol("exclamationmark.triangle", color: nil)

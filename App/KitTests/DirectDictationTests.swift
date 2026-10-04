@@ -247,4 +247,46 @@ final class DirectDictationTests: XCTestCase {
         await c.stopDirectDictation()
         XCTAssertEqual(typer.typed, [])
     }
+
+    /// The microphone can't start (a headset mid-switch): the direct dictation ends, the failure shows, and
+    /// the next one can start.
+    func testMicrophoneFailureEndsTheDirectDictation() async {
+        final class BrokenMic: AudioInput, @unchecked Sendable {
+            var fail = true
+            func start(_ onSamples: @escaping ([Float]) -> Void) throws { if fail { throw EngineError.io("formats don't match") } }
+            func stop() {}
+        }
+        let broken = BrokenMic()
+        let c = DictationController(model: .nemotron160, loader: FakeLoader(factory: factory), microphone: broken, permission: FakePermission(),
+                                    clipboard: clip, microphoneQueue: DispatchQueue(label: "test-mic"))
+        c.enableDirectDictation(typer: typer, accessibility: access)
+        c.loadModel()
+        for _ in 0..<50 where c.phase == .preparing { try? await Task.sleep(for: .milliseconds(5)) }
+        _ = await c.startDirectDictation()
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(c.isDirectDictating); XCTAssertTrue(c.directDictationFailed)
+        broken.fail = false
+        let r = await c.startDirectDictation()
+        XCTAssertEqual(r, .started)
+    }
+
+    /// After the microphone failed in the panel, opening it again tries again.
+    func testPanelRetriesAfterAMicrophoneFailure() async {
+        final class FlakyMic: AudioInput, @unchecked Sendable {
+            var fail = true
+            func start(_ onSamples: @escaping ([Float]) -> Void) throws { if fail { throw EngineError.io("formats don't match") } }
+            func stop() {}
+        }
+        let flaky = FlakyMic()
+        let c = DictationController(model: .nemotron160, loader: FakeLoader(factory: factory), microphone: flaky, permission: FakePermission(),
+                                    clipboard: clip)
+        c.loadModel()
+        for _ in 0..<50 where c.phase == .preparing { try? await Task.sleep(for: .milliseconds(5)) }
+        await c.panelOpened()
+        guard case .failed = c.phase else { return XCTFail("phase \(c.phase)") }
+        c.panelClosed()
+        flaky.fail = false
+        await c.panelOpened()
+        XCTAssertEqual(c.phase, .listening)
+    }
 }

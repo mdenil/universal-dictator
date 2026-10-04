@@ -26,10 +26,22 @@ public final class Microphone {
 
     public init() {}
 
+    /// Starts capturing on a fresh engine, which sees the current default device and its format (an engine
+    /// kept from an earlier start still describes the device as it was then, and fails to start if a headset
+    /// has connected since). If the start fails, as it can while a device is still switching, it tries once
+    /// more after 0.3 s. Blocks while doing so: call it off the main thread.
     public func start(_ onSamples: @escaping ([Float]) -> Void) throws {
         lock.lock(); defer { lock.unlock() }
         self.onSamples = onSamples
-        try installAndStart()
+        engine = AVAudioEngine()
+        do {
+            try installAndStart()
+        } catch {
+            teardown()
+            usleep(300_000)
+            engine = AVAudioEngine()
+            do { try installAndStart() } catch { teardown(); self.onSamples = nil; throw error }
+        }
     }
 
     /// A tap on the input in whatever format it delivers, then the engine; and a watch for format changes.
