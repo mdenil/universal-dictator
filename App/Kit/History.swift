@@ -11,14 +11,31 @@ public struct HistoryEntry: Identifiable, Equatable, Codable, Sendable {
     public let copied: Bool
     /// Whether the text was changed in the History window.
     public var edited: Bool
+    /// Whether it was a direct dictation, typed into another app.
+    public let typed: Bool
 
-    public init(id: UUID = UUID(), text: String, date: Date, model: ModelChoice, copied: Bool, edited: Bool = false) {
+    public init(id: UUID = UUID(), text: String, date: Date, model: ModelChoice, copied: Bool, edited: Bool = false, typed: Bool = false) {
         self.id = id
         self.text = text
         self.date = date
         self.model = model
         self.copied = copied
         self.edited = edited
+        self.typed = typed
+    }
+
+    enum CodingKeys: String, CodingKey { case id, text, date, model, copied, edited, typed }
+
+    /// Reads entries saved before a field existed (it takes its default).
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        text = try c.decode(String.self, forKey: .text)
+        date = try c.decode(Date.self, forKey: .date)
+        model = try c.decode(ModelChoice.self, forKey: .model)
+        copied = try c.decode(Bool.self, forKey: .copied)
+        edited = try c.decodeIfPresent(Bool.self, forKey: .edited) ?? false
+        typed = try c.decodeIfPresent(Bool.self, forKey: .typed) ?? false
     }
 }
 

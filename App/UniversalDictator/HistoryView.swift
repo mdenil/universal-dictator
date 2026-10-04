@@ -105,10 +105,11 @@ struct HistoryView: View {
         .background(editing ? Color.accentColor.opacity(0.05) : Color.clear)
     }
 
-    /// "Today at 09:10 · Fast · copied · edited".
+    /// "Today at 09:10 · Fast · copied · edited" (or "· typed" for a direct dictation).
     func meta(_ entry: HistoryEntry) -> String {
         var parts = [Self.dateFormatter.string(from: entry.date), entry.model.displayName]
         if entry.copied { parts.append("copied") }
+        if entry.typed { parts.append("typed") }
         if entry.edited { parts.append("edited") }
         return parts.joined(separator: " · ")
     }

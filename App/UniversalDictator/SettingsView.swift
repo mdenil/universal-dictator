@@ -1,3 +1,4 @@
+import Carbon
 import DictatorCore
 import SwiftUI
 import UniversalDictatorKit
@@ -5,6 +6,7 @@ import UniversalDictatorKit
 /// The Settings window (design: Figma "Settings (draft)"): labels on the left, controls on the right.
 struct SettingsView: View {
     @Bindable var controller: DictationController
+    @Bindable var direct: DirectSettings
     @State var confirmingClear = false
 
     var body: some View {
@@ -32,6 +34,23 @@ struct SettingsView: View {
                 }
                 .labelsHidden()
                 .fixedSize()
+            }
+            Divider()
+            row("Shortcut") { ShortcutField(settings: direct) }
+            row("Mode") {
+                Picker("Mode", selection: $direct.mode) {
+                    ForEach(DirectMode.allCases) { Text($0.displayName).tag($0) }
+                }
+                .labelsHidden()
+                .fixedSize()
+            }
+            row("Accessibility") {
+                if direct.accessibilityGranted {
+                    Text("Allowed ✓").foregroundStyle(.secondary)
+                } else {
+                    Button("Allow…") { controller.openAccessibilitySettings() }
+                        .buttonStyle(.borderedProminent)
+                }
             }
         }
         .padding(.horizontal, 24)
@@ -61,5 +80,78 @@ struct SettingsView: View {
         case .preparing: return "The model is getting ready."
         default: return ""
         }
+    }
+}
+
+/// The shortcut field: shows the shortcut; click it, then double-tap a modifier key or press a key combination
+/// (with ⌘, ⌃ or ⌥, or a function key). Esc cancels.
+struct ShortcutField: View {
+    @Bindable var settings: DirectSettings
+    @State var monitor: Any?
+    @State var detectors: [ModifierKey: DoubleTapDetector] = [:]
+
+    var body: some View {
+        Button(action: { settings.isRecording ? stop() : start() }) {
+            Text(settings.isRecording ? "Press keys…" : settings.shortcut.display)
+                .foregroundStyle(settings.isRecording ? .secondary : .primary)
+                .frame(minWidth: 100)
+        }
+        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.accentColor, lineWidth: settings.isRecording ? 2 : 0))
+        .onDisappear { stop() }
+    }
+
+    func start() {
+        settings.isRecording = true
+        detectors = [:]
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { e in
+            handle(e) ? nil : e
+        }
+    }
+
+    func stop() {
+        if let m = monitor { NSEvent.removeMonitor(m) }
+        monitor = nil
+        settings.isRecording = false
+    }
+
+    /// True if the event was used.
+    func handle(_ e: NSEvent) -> Bool {
+        if e.type == .flagsChanged {
+            guard let key = ModifierKey(keyCode: e.keyCode) else { return false }
+            var d = detectors[key] ?? DoubleTapDetector(key: key)
+            let event = HotkeyCenter.detectorEvent(e)
+            for other in detectors.keys where other != key { _ = detectors[other]?.handle(event) }
+            if d.handle(event) == .doubleTapDown {
+                settings.shortcut = .doubleTap(key)
+                stop()
+            }
+            detectors[key] = d
+            return true
+        }
+        let flags = e.modifierFlags.intersection([.command, .control, .option, .shift])
+        if e.keyCode == 53, flags.isEmpty { stop(); return true }                   // Esc
+        let fKeys: Set<UInt16> = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80]
+        guard !flags.intersection([.command, .control, .option]).isEmpty || fKeys.contains(e.keyCode) else { NSSound.beep(); return true }
+        var carbon: UInt32 = 0
+        if flags.contains(.command) { carbon |= UInt32(cmdKey) }
+        if flags.contains(.option) { carbon |= UInt32(optionKey) }
+        if flags.contains(.control) { carbon |= UInt32(controlKey) }
+        if flags.contains(.shift) { carbon |= UInt32(shiftKey) }
+        var symbols = ""
+        if flags.contains(.control) { symbols += "⌃" }
+        if flags.contains(.option) { symbols += "⌥" }
+        if flags.contains(.shift) { symbols += "⇧" }
+        if flags.contains(.command) { symbols += "⌘" }
+        settings.shortcut = .combination(keyCode: UInt32(e.keyCode), carbonModifiers: carbon, display: symbols + Self.keyName(e))
+        stop()
+        return true
+    }
+
+    static func keyName(_ e: NSEvent) -> String {
+        let named: [UInt16: String] = [49: "Space", 36: "↩", 48: "⇥", 51: "⌫", 122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5",
+                                       97: "F6", 98: "F7", 100: "F8", 101: "F9", 109: "F10", 103: "F11", 111: "F12", 105: "F13",
+                                       107: "F14", 113: "F15", 106: "F16", 64: "F17", 79: "F18", 80: "F19"]
+        if let n = named[e.keyCode] { return n }
+        return (e.charactersIgnoringModifiers ?? "?").uppercased()
     }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import DictatorCore
 import SwiftUI
 import UniversalDictatorKit
@@ -17,6 +18,8 @@ struct UniversalDictatorApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var controller: DictationController!
     var menuBar: MenuBarPanel!
+    var direct: DirectSettings!
+    var hotkeys: HotkeyCenter!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let assets = ModelAssets(directory: Bundle.main.resourceURL!.appendingPathComponent("NemotronAssets"))
@@ -29,7 +32,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                          microphoneQueue: DispatchQueue(label: "microphone", qos: .userInitiated),
                                          history: FileHistoryStore.standard(bundleID: Bundle.main.bundleIdentifier ?? "dev.universaldictator.UniversalDictator"),
                                          historyLimit: limit)
-        menuBar = MenuBarPanel(controller: controller)
+        direct = DirectSettings()
+        controller.enableDirectDictation(typer: KeyboardTyper(), accessibility: SystemAccessibility())
+        menuBar = MenuBarPanel(controller: controller, direct: direct)
+        hotkeys = HotkeyCenter(settings: direct)
+        hotkeys.onDown = { [weak self] in self?.menuBar.shortcutDown() }
+        hotkeys.onUp = { [weak self] in self?.menuBar.shortcutUp() }
         if CommandLine.arguments.contains("--diagnose-start") {
             // Twice: open the panel and start a real dictation, time it, report the icon's position and whether
             // it is on screen while listening, close. The microphone runs for about three seconds each time.
@@ -85,7 +93,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.loadModel()
         // Ask for the microphone now rather than on the first click: the system prompt takes focus, which
         // would close the panel mid-start.
-        Task { await controller.requestMicrophoneAccessIfNeeded() }
+        Task {
+            await controller.requestMicrophoneAccessIfNeeded()
+            // Direct dictation needs Accessibility: macOS's prompt, once.
+            if !AXIsProcessTrusted(), !UserDefaults.standard.bool(forKey: "askedAccessibility") {
+                UserDefaults.standard.set(true, forKey: "askedAccessibility")
+                SystemAccessibility.prompt()
+            }
+        }
     }
 
     /// Quitting keeps a paused or unfinished dictation's text in the history.

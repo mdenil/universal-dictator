@@ -88,6 +88,8 @@ public final class DictationController {
         /// Stopped; the text is editable.
         case done
         case microphoneDenied
+        /// The direct-dictation shortcut was used before typing into other apps was allowed.
+        case accessibilityNeeded
         case failed(String)
     }
 
@@ -153,7 +155,7 @@ public final class DictationController {
     public var wordCount: Int { (phase == .done ? editedText : text).split(whereSeparator: \.isWhitespace).count }
     public var isModelReady: Bool { factory != nil && loadedModel == model }
     /// The model menu is usable when no dictation is in progress.
-    public var canChangeModel: Bool { phase != .listening && phase != .paused && phase != .preparing }
+    public var canChangeModel: Bool { phase != .listening && phase != .paused && phase != .preparing && !isDirectDictating }
 
     /// Loads the current model (at launch, or after changing models).
     public func loadModel() {
@@ -191,6 +193,7 @@ public final class DictationController {
     /// dictation; every other one ended when the panel closed).
     public func panelOpened() async {
         isPanelOpen = true
+        guard !isDirectDictating else { return }       // the app stops a direct dictation before opening the panel
         switch phase {
         case .idle: await start()
         case .preparing: startWhenReady = true
@@ -218,16 +221,18 @@ public final class DictationController {
         case .done:
             archive(editedText, model: model, copied: false)
             reset()
+        case .accessibilityNeeded:
+            phase = .idle
         default:
             break
         }
     }
 
     /// Adds a finished dictation to the history (empty text is not kept).
-    func archive(_ text: String, model: ModelChoice, copied: Bool) {
+    func archive(_ text: String, model: ModelChoice, copied: Bool, typed: Bool = false) {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
-        history.insert(HistoryEntry(text: t, date: Date(), model: model, copied: copied), at: 0)
+        history.insert(HistoryEntry(text: t, date: Date(), model: model, copied: copied, typed: typed), at: 0)
         _ = trimHistory()
         historyStore.save(history)
     }
@@ -265,6 +270,12 @@ public final class DictationController {
     /// The app is quitting: whatever is dictated or edited goes to the history (synchronously, with the text
     /// as shown; a listening session's last words are not waited for).
     public func finishForQuit() {
+        if isDirectDictating, directSession != nil {
+            stopMicrophone(timed: false)
+            isDirectDictating = false
+            archive(directTyped, model: model, copied: false, typed: true)
+            directSession = nil
+        }
         switch phase {
         case .listening, .paused, .done:
             if phase == .listening { stopMicrophone() }
@@ -315,12 +326,15 @@ public final class DictationController {
         }
     }
 
-    func startMicrophone(_ s: DictationSessionType) throws {
+    /// Starts the microphone into `s`. `timed`: counts towards the panel dictation's elapsed time and shows
+    /// the level (not for direct dictation, which has no panel).
+    func startMicrophone(_ s: DictationSessionType, timed: Bool = true) throws {
         var lastLevel = Date.distantPast
         let mic = microphone
         let t0 = Date()
         let onSamples: ([Float]) -> Void = { [weak self] samples in
             s.push(samples)
+            guard timed else { return }
             let now = Date()
             if now.timeIntervalSince(lastLevel) > 0.05 {
                 lastLevel = now
@@ -347,6 +361,7 @@ public final class DictationController {
         } else {
             try mic.start(onSamples)
         }
+        guard timed else { return }
         listenStart = Date()
         tick?.invalidate()
         tick = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -354,9 +369,10 @@ public final class DictationController {
         }
     }
 
-    func stopMicrophone() {
+    func stopMicrophone(timed: Bool = true) {
         let mic = microphone
         if let q = microphoneQueue { q.async { mic.stop() } } else { mic.stop() }
+        guard timed else { return }
         tick?.invalidate(); tick = nil
         if let t = listenStart { elapsedBefore += Date().timeIntervalSince(t) }
         listenStart = nil
@@ -430,6 +446,83 @@ public final class DictationController {
         guard phase == .done else { return }
         reset()
         await start()
+    }
+
+    // MARK: Direct dictation
+
+    /// Whether a direct dictation is listening (the menu-bar icon is red; there is no panel).
+    public private(set) var isDirectDictating = false
+    var directSession: DictationSessionType?
+    var directUpdates: Task<Void, Never>?
+    /// What has been typed so far in this direct dictation.
+    var directTyped = ""
+    var typer: TextTyper?
+    var accessibility: AccessibilityPermission?
+
+    /// Connects direct dictation to the app's typing and permission (the app calls this once at launch).
+    public func enableDirectDictation(typer: TextTyper, accessibility: AccessibilityPermission) {
+        self.typer = typer
+        self.accessibility = accessibility
+    }
+
+    /// Starts a direct dictation: the microphone on, each finished word typed into the focused field. The
+    /// panel must be closed (the app closes it first). A paused panel dictation is left as it is.
+    public func startDirectDictation() async -> DirectStartResult {
+        guard !isDirectDictating, !isPanelOpen, let typer else { return .ignored }
+        guard accessibility?.isGranted ?? false else { return .needsAccessibility }
+        guard factory != nil, loadedModel == model, permission.isGranted else { return .needsPanel }
+        do {
+            let s = try factory!.makeSession()
+            directSession = s
+            directTyped = ""
+            isDirectDictating = true
+            directUpdates = Task { [weak self] in
+                for await u in s.updates {
+                    guard let self, self.directSession === s else { break }
+                    self.typeNewWords(u.committed, typer)
+                }
+            }
+            try startMicrophone(s, timed: false)
+            timing.notice("direct dictation started")
+            return .started
+        } catch {
+            isDirectDictating = false
+            directSession = nil
+            return .needsPanel
+        }
+    }
+
+    /// Stops a direct dictation: the microphone off, the last words typed, the text to the history.
+    public func stopDirectDictation() async {
+        guard isDirectDictating, let s = directSession, let typer else { return }
+        isDirectDictating = false
+        stopMicrophone(timed: false)
+        let final = await s.stop()
+        directUpdates?.cancel()
+        directSession = nil
+        typeNewWords(final, typer)
+        archive(final, model: model, copied: false, typed: true)
+        directTyped = ""
+    }
+
+    func typeNewWords(_ text: String, _ typer: TextTyper) {
+        guard let new = untypedSuffix(of: text, typed: directTyped) else {
+            timing.error("direct dictation: text no longer starts with what was typed; not typing more")
+            return
+        }
+        guard !new.isEmpty else { return }
+        typer.type(new)
+        directTyped += new
+    }
+
+    /// The shortcut was used before Accessibility was allowed: the panel (which the app opens) explains.
+    public func showAccessibilityNeeded() {
+        if phase == .idle { phase = .accessibilityNeeded }
+    }
+
+    /// Opens the Accessibility pane of System Settings.
+    public func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") { NSWorkspace.shared.open(url) }
     }
 
     /// Opens the Microphone pane of System Settings.

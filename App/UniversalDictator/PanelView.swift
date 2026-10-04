@@ -86,6 +86,15 @@ struct PanelView: View {
             }
             .padding(14)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .accessibilityNeeded:
+            VStack(spacing: 8) {
+                Image(systemName: "keyboard").font(.system(size: 22)).foregroundStyle(.secondary)
+                Text("Typing in other apps is off").font(.system(size: 13, weight: .semibold))
+                Text("Turn on Universal Dictator in System Settings › Privacy & Security › Accessibility to use the dictation shortcut.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let message):
             VStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle").font(.system(size: 20)).foregroundStyle(.secondary)
@@ -135,6 +144,9 @@ struct PanelView: View {
             case .microphoneDenied:
                 Spacer()
                 Button("Open System Settings") { controller.openMicrophoneSettings() }.buttonStyle(.borderedProminent)
+            case .accessibilityNeeded:
+                Spacer()
+                Button("Open System Settings") { controller.openAccessibilitySettings() }.buttonStyle(.borderedProminent)
             case .idle, .preparing, .failed:
                 Spacer()
                 Button("Close") { close() }.buttonStyle(.borderless).font(.system(size: 12))

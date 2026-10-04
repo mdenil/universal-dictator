@@ -67,6 +67,14 @@ Using it:
 - **History** keeps the last 50 dictations (10–200 in Settings), saved on this Mac in `~/Library/Application Support/dev.universaldictator.UniversalDictator/history.json`. The History window searches them and has Copy, Edit and Delete for each.
 - **Settings** (right-click → Settings…, or ⌘, while the panel is open): the model, **Fast** (Nemotron 160 ms) or **Accurate** (Nemotron 560 ms), the history length, and Clear History….
 
+**Direct dictation** types straight into the focused text field of any app, with no window:
+
+- **Double-tap Left Shift** (the default; change it in Settings): the icon turns red, and each finished word is typed at the cursor as if you had typed it. The word still being recognised isn't typed, so nothing is ever erased and retyped.
+- **Toggle** (default): double-tap again to stop. **Hold to talk**: Shift, Shift-hold while talking, release to stop.
+- Stopping types the last word. Each direct dictation goes to History, marked "typed". Clicking the icon during one stops it.
+- It needs the Accessibility permission (System Settings › Privacy & Security › Accessibility), which the app asks for once. Nothing is typed into password fields or apps using secure keyboard entry.
+- The plan is `DIRECT_DICTATION_PLAN.md`.
+
 At launch the app prepares the selected model for the Neural Engine in the background: about half a minute the first time after installing or updating (Core ML then caches it per macOS version), under a second after that. Clicking meanwhile shows "Getting things ready for you…" and dictation starts by itself when it is ready. Only the chosen model is kept in memory. Switching prepares the other one the same way the first time it is used on this Mac; after that, switching takes under a second. The app asks for microphone access at launch.
 
 Checks without clicking through the app:
@@ -77,6 +85,8 @@ $APP --selftest /path/to/audio.flac --model nemotron160    # the app's controlle
                                                             # reopens the panel, edits the paused text and resumes
 $APP --snapshot /tmp/panel-states                          # renders every panel state, Settings and History to PNG
 $APP --measure-switch                                      # model load and switch times, and memory
+$APP --typing-test                                         # types into a test window by each route, with keys held (needs Accessibility)
+$APP --direct-selftest /path/to/audio.flac                  # direct dictation into a test window; PASS if it holds the final text
 $APP --diagnose-start                                      # opens the panel twice for real: start timing, icon position
 .build/release/dictate-cli dictate audio.flac --pause-at 5  # the same code path from the CLI
 swift test                                                  # engine, core (Neural Engine) and app-logic tests

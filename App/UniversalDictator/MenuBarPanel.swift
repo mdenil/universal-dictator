@@ -10,12 +10,14 @@ let log = Logger(subsystem: "dev.universaldictator.UniversalDictator", category:
 @MainActor
 final class MenuBarPanel: NSObject, NSWindowDelegate {
     let controller: DictationController
+    let direct: DirectSettings
     let item: NSStatusItem
     let panel: DropDownPanel
     var host: NSHostingView<PanelView>!
 
-    init(controller: DictationController) {
+    init(controller: DictationController, direct: DirectSettings) {
         self.controller = controller
+        self.direct = direct
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         panel = DropDownPanel()
         super.init()
@@ -128,7 +130,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
 
     @objc func showSettings() {
         if settingsWindow == nil {
-            settingsWindow = Self.window(title: "Settings", content: SettingsView(controller: controller), resizable: false)
+            settingsWindow = Self.window(title: "Settings", content: SettingsView(controller: controller, direct: direct), resizable: false)
         }
         Self.present(settingsWindow!)
     }
@@ -161,7 +163,54 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
     }
 
     @objc func toggle() {
+        // A click during a direct dictation stops it (typing the last words) and opens nothing.
+        if controller.isDirectDictating { Task { await controller.stopDirectDictation() }; return }
         if panel.isVisible { close() } else if Date().timeIntervalSince(lastClose) > 0.3 { open() }
+    }
+
+    // MARK: Direct dictation
+
+    /// Whether the shortcut is held down (Hold to talk stops when it's released, even mid-start).
+    var shortcutHeld = false
+
+    func shortcutDown() {
+        shortcutHeld = true
+        switch direct.mode {
+        case .toggle:
+            if controller.isDirectDictating { Task { await controller.stopDirectDictation() } } else { startDirect() }
+        case .holdToTalk:
+            if !controller.isDirectDictating { startDirect() }
+        }
+    }
+
+    func shortcutUp() {
+        shortcutHeld = false
+        if direct.mode == .holdToTalk, controller.isDirectDictating { Task { await controller.stopDirectDictation() } }
+    }
+
+    func startDirect() {
+        if KeyboardTyper.secureInputIsOn {
+            log.notice("direct dictation: secure input is on, not starting")
+            item.button?.image = Self.symbol("exclamationmark.triangle", color: nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.updateIcon() }
+            return
+        }
+        if panel.isVisible { close() }
+        Task {
+            let result = await controller.startDirectDictation()
+            log.notice("direct dictation start: \(String(describing: result), privacy: .public)")
+            switch result {
+            case .started:
+                if direct.mode == .holdToTalk, !shortcutHeld { await controller.stopDirectDictation() }
+            case .needsPanel:
+                open()
+            case .needsAccessibility:
+                controller.showAccessibilityNeeded()
+                open(startDictation: false)
+            case .ignored:
+                break
+            }
+        }
     }
 
     /// Where the panel goes: under the menu-bar icon, inside the screen.
@@ -250,10 +299,10 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
             // One shape; the colour tells the state: as the menu bar (idle, getting ready), red (listening),
             // yellow (paused). Problems that need the user show a warning triangle.
             let image: NSImage?
-            switch controller.phase {
+            switch controller.isDirectDictating ? .listening : controller.phase {
             case .listening: image = Self.symbol("waveform", color: .systemRed)
             case .paused: image = Self.symbol("waveform", color: .systemYellow)
-            case .microphoneDenied, .failed: image = Self.symbol("exclamationmark.triangle", color: nil)
+            case .microphoneDenied, .accessibilityNeeded, .failed: image = Self.symbol("exclamationmark.triangle", color: nil)
             default: image = Self.symbol("waveform", color: nil)
             }
             item.button?.image = image
