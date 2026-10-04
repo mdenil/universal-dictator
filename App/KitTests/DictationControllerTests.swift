@@ -554,7 +554,7 @@ final class DictationControllerTests: XCTestCase {
         final class SlowMic: AudioInput, @unchecked Sendable {
             func start(_ onSamples: @escaping ([Float]) -> Void) throws {
                 usleep(150_000)
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { onSamples([0]) }    // first audio a moment later
+                DispatchQueue.global().asyncAfter(deadline: .now() + 0.05) { onSamples([0.01]) }  // first sound a moment later
             }
             func stop() {}
         }
@@ -572,5 +572,19 @@ final class DictationControllerTests: XCTestCase {
         c.panelClosed()
         try? await Task.sleep(for: .milliseconds(300))
         XCTAssertFalse(c.isMicrophoneLive)
+    }
+
+    /// Digital silence (exact zeros, as a Bluetooth headset sends while its link comes up) isn't "live";
+    /// the first real sound is.
+    func testDigitalSilenceIsNotLive() async {
+        let c = await makeController()
+        await c.panelOpened()
+        mic.callback?([Float](repeating: 0, count: 1600))
+        await settle()
+        XCTAssertFalse(c.isMicrophoneLive)
+        mic.callback?([0, 0, 0.002, 0])
+        await settle()
+        XCTAssertTrue(c.isMicrophoneLive)
+        XCTAssertEqual(factory.sessions[0].pushed, 1604)                 // the silence still goes to the model
     }
 }

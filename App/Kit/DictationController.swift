@@ -133,9 +133,10 @@ public final class DictationController {
     var tick: Timer?
     /// A stop is waiting for the microphone and the session to finish.
     var stopping = false
-    /// Whether the microphone is actually capturing: true once its first audio arrives, which can be a while
-    /// after it is started (a Bluetooth headset first switches to its call mode). The menu-bar icon turns red
-    /// only then.
+    /// Whether the microphone is actually capturing: true once its first real sound arrives (not digital
+    /// silence), which can be half a second after it is started (a Bluetooth headset first switches to its
+    /// call mode, then sends zeros until its microphone link is up). The menu-bar icon turns red, and a direct
+    /// dictation plays its start sound, only then.
     public private(set) var isMicrophoneLive = false
     /// Counts microphone starts and stops, so a start that finishes after a later stop doesn't count as live.
     var microphoneGeneration = 0
@@ -345,10 +346,14 @@ public final class DictationController {
         microphoneGeneration += 1
         let generation = microphoneGeneration
         let firstAudio = OnceFlag()
+        let onset = OnsetProbe(start: t0)
         let onSamples: ([Float]) -> Void = { [weak self] samples in
             s.push(samples)
-            if firstAudio.claim() {
-                timing.notice("microphone live (first audio) after \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+            onset.add(samples)
+            // Live at the first real sound: a Bluetooth headset sends digital silence (exact zeros) for up to a
+            // few hundred milliseconds while its microphone link comes up, and words said then are lost.
+            if samples.contains(where: { $0 != 0 }), firstAudio.claim() {
+                timing.notice("microphone live (first sound) after \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
                 Task { @MainActor in
                     guard let self, self.microphoneGeneration == generation else { return }
                     self.isMicrophoneLive = true
@@ -615,5 +620,43 @@ final class OnceFlag: @unchecked Sendable {
         if done { return false }
         done = true
         return true
+    }
+}
+
+/// Logs how a capture begins, for the "first words lost" question: when the first non-zero sample arrives
+/// (a Bluetooth headset can send digital silence while its microphone link comes up), and the peak level of
+/// each 100 ms for the first 1.5 s.
+final class OnsetProbe: @unchecked Sendable {
+    let start: Date
+    let lock = NSLock()
+    var samples = 0
+    var sawNonZero = false
+    var windowPeak: Float = 0
+    var windowCount = 0
+    var peaks: [String] = []
+    var done = false
+
+    init(start: Date) { self.start = start }
+
+    func add(_ x: [Float]) {
+        lock.lock(); defer { lock.unlock() }
+        guard !done else { return }
+        if !sawNonZero, let i = x.firstIndex(where: { $0 != 0 }) {
+            sawNonZero = true
+            timing.notice("capture onset: first non-zero sample \(Int(Date().timeIntervalSince(self.start) * 1000)) ms after start, \(self.samples + i) samples into the audio")
+        }
+        for v in x {
+            windowPeak = max(windowPeak, abs(v))
+            windowCount += 1
+            if windowCount == 1600 {                                       // 100 ms at 16 kHz
+                peaks.append(windowPeak == 0 ? "0" : String(format: "%.0f", 20 * log10(windowPeak)))
+                windowPeak = 0; windowCount = 0
+            }
+        }
+        samples += x.count
+        if samples >= 24000 {
+            done = true
+            timing.notice("capture onset: peak dB per 100 ms from the first audio: \(self.peaks.joined(separator: " "), privacy: .public)")
+        }
     }
 }
