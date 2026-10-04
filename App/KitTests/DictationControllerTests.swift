@@ -6,13 +6,26 @@ final class FakeSession: DictationSessionType, @unchecked Sendable {
     let updates: AsyncStream<TranscriptUpdate>
     let cont: AsyncStream<TranscriptUpdate>.Continuation
     var pushed = 0, pauses = 0, resumes = 0
-    var final = "hello world"
+    /// What `stop` returns; nil returns the text said (or handed over) last.
+    var final: String? = "hello world"
+    var said = ""
+    /// What a pause finishes the text to (the last words); nil: the text said last.
+    var flushed: String?
+    var replaced: [String] = []
     init() { (updates, cont) = AsyncStream<TranscriptUpdate>.makeStream() }
     func push(_ samples: [Float]) { pushed += samples.count }
     func pause() { pauses += 1 }
+    func settledText() async -> String { flushed ?? said }
+    func replaceText(_ text: String) { replaced.append(text); said = text }
     func resume() { resumes += 1 }
-    func stop() async -> String { cont.yield(TranscriptUpdate(committed: final, partial: "", isPaused: false, isFinished: true)); cont.finish(); return final }
-    func say(_ committed: String, _ partial: String) { cont.yield(TranscriptUpdate(committed: committed, partial: partial, isPaused: false, isFinished: false)) }
+    func stop() async -> String {
+        let f = final ?? said
+        cont.yield(TranscriptUpdate(committed: f, partial: "", isPaused: false, isFinished: true)); cont.finish(); return f
+    }
+    func say(_ committed: String, _ partial: String) {
+        said = committed + partial
+        cont.yield(TranscriptUpdate(committed: committed, partial: partial, isPaused: false, isFinished: false))
+    }
 }
 
 final class FakeFactory: SessionFactory, @unchecked Sendable {
@@ -115,13 +128,115 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(c.text, "")
     }
 
-    func testClosingWhilePausedAlsoEnds() async {
+    /// Closing the panel while paused keeps the dictation: the next opening shows it still paused, and Resume
+    /// carries on in the same session.
+    func testClosingWhilePausedKeepsTheDictation() async {
         let c = await makeController()
         await c.panelOpened()
+        factory.sessions[0].say("first ", "part")
+        await settle()
         c.pause()
+        await settle()
         c.panelClosed()
         await settle()
-        XCTAssertEqual(c.phase, .idle); XCTAssertEqual(c.history.count, 1)
+        XCTAssertEqual(c.phase, .paused); XCTAssertFalse(mic.running); XCTAssertTrue(c.history.isEmpty)
+        await c.panelOpened()
+        XCTAssertEqual(c.phase, .paused); XCTAssertEqual(c.text, "first part"); XCTAssertFalse(mic.running)
+        XCTAssertEqual(factory.sessions.count, 1)
+        c.resume()
+        XCTAssertEqual(c.phase, .listening); XCTAssertTrue(mic.running)
+        mic.callback?([Float](repeating: 0, count: 320))
+        XCTAssertEqual(factory.sessions[0].pushed, 320)
+    }
+
+    func testReopenedPausedDictationStops() async {
+        let c = await makeController()
+        await c.panelOpened()
+        c.pause(); c.panelClosed(); await c.panelOpened()
+        await c.stop()
+        XCTAssertEqual(c.phase, .done); XCTAssertEqual(c.editedText, "hello world")
+    }
+
+    /// Resume can't happen with the panel closed (the microphone only runs while it is open).
+    func testResumeNeedsTheOpenPanel() async {
+        let c = await makeController()
+        await c.panelOpened()
+        c.pause(); c.panelClosed()
+        c.resume()
+        XCTAssertEqual(c.phase, .paused); XCTAssertFalse(mic.running)
+    }
+
+    /// Pause shows the text at once, then adds the last words the session finishes.
+    func testPauseAddsTheLastWords() async {
+        let c = await makeController()
+        await c.panelOpened()
+        let s = factory.sessions[0]
+        s.say("so far ", "wor"); s.flushed = "so far words."
+        await settle()
+        c.pause()
+        XCTAssertEqual(c.text, "so far wor")
+        await settle()
+        XCTAssertEqual(c.text, "so far words.")
+    }
+
+    /// Typing before the last words arrive keeps what was typed.
+    func testTypingDuringPauseIsKept() async {
+        let c = await makeController()
+        await c.panelOpened()
+        let s = factory.sessions[0]
+        s.say("so far ", "wor"); s.flushed = "so far words."
+        await settle()
+        c.pause()
+        c.editedText = "typed"
+        await settle()
+        XCTAssertEqual(c.editedText, "typed")
+    }
+
+    /// An edit made while paused goes to the session on Resume; new words follow it; Stop gives the lot.
+    func testEditWhilePausedThenResume() async {
+        let c = await makeController()
+        await c.panelOpened()
+        let s = factory.sessions[0]; s.final = nil
+        s.say("frist draft ", "")
+        await settle()
+        c.pause(); await settle()
+        c.editedText = "First draft."
+        c.resume()
+        XCTAssertEqual(s.replaced, ["First draft."])
+        XCTAssertEqual(c.phase, .listening); XCTAssertEqual(c.text, "First draft.")
+        s.say("First draft. And more", "")
+        await settle()
+        await c.stop()
+        XCTAssertEqual(c.editedText, "First draft. And more")
+    }
+
+    func testEditWhilePausedThenStop() async {
+        let c = await makeController()
+        await c.panelOpened()
+        let s = factory.sessions[0]; s.final = nil
+        s.say("frist ", ""); await settle()
+        c.pause(); await settle()
+        c.editedText = "First."
+        await c.stopAndCopy()
+        XCTAssertEqual(s.replaced, ["First."]); XCTAssertEqual(clip.text, "First.")
+    }
+
+    func testNoEditHandsNothingOver() async {
+        let c = await makeController()
+        await c.panelOpened()
+        c.pause(); await settle()
+        c.resume(); c.pause(); await settle(); await c.stop()
+        XCTAssertEqual(factory.sessions[0].replaced, [])
+    }
+
+    func testQuitWhilePausedKeepsTheTextInHistory() async {
+        let c = await makeController()
+        await c.panelOpened()
+        c.pause(); await settle()
+        c.editedText = "Keep me."
+        c.panelClosed()
+        c.finishForQuit()
+        XCTAssertEqual(c.history.map(\.text), ["Keep me."])
     }
 
     /// ⌘C while listening: the microphone stops, the whole (final) text is copied, the dictation clears.

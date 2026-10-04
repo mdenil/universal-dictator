@@ -78,4 +78,42 @@ final class DictationTests: XCTestCase {
         XCTAssertEqual(last?.isFinished, true)
         XCTAssertEqual(last?.text, text)
     }
+
+    /// Editing while paused: the edited text replaces everything so far; resumed words are appended to it.
+    func testEditWhilePaused() async throws {
+        let model = try await load(.nemotron160)
+        let audio = try AudioFile.readMono16k(clip)
+        let half = audio.count / 2
+        let first = Array(audio[..<half]), second = Array(audio[half...])
+        func alone(_ x: [Float]) throws -> String {
+            let s = try model.makeStreamer(); pushAll({ s.push(samples: $0) }, x); s.flush()
+            return s.text.trimmingCharacters(in: .whitespaces)
+        }
+        let session = try model.startSession()
+        pushAll({ session.push($0) }, first)
+        session.pause()
+        let paused = await session.settledText()
+        XCTAssertEqual(paused, try alone(first))                                  // the last words are in
+        session.replaceText("Edited first half.\n")
+        session.resume()
+        pushAll({ session.push($0) }, second)
+        let text = await session.stop()
+        XCTAssertEqual(text, "Edited first half.\n" + (try alone(second)))         // no extra space after a newline
+    }
+
+    /// Deleting everything while paused: only the resumed words remain.
+    func testClearWhilePaused() async throws {
+        let model = try await load(.nemotron160)
+        let audio = try AudioFile.readMono16k(clip)
+        let half = audio.count / 2
+        let session = try model.startSession()
+        pushAll({ session.push($0) }, Array(audio[..<half]))
+        session.pause()
+        session.replaceText("")
+        session.resume()
+        pushAll({ session.push($0) }, Array(audio[half...]))
+        let s = try model.makeStreamer(); pushAll({ s.push(samples: $0) }, Array(audio[half...])); s.flush()
+        let text = await session.stop()
+        XCTAssertEqual(text, s.text.trimmingCharacters(in: .whitespaces))
+    }
 }

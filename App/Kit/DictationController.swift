@@ -15,6 +15,10 @@ public protocol DictationSessionType: AnyObject, Sendable {
     var updates: AsyncStream<TranscriptUpdate> { get }
     func push(_ samples: [Float])
     func pause()
+    /// The whole text once a pause has finished the last words.
+    func settledText() async -> String
+    /// While paused: replaces the text so far with the user's edit.
+    func replaceText(_ text: String)
     func resume()
     func stop() async -> String
 }
@@ -89,6 +93,7 @@ public final class DictationController {
         /// A model is loading.
         case preparing
         case listening
+        /// The microphone is off and the text is editable; Resume appends to it. Survives closing the panel.
         case paused
         /// Stopped; the text is editable.
         case done
@@ -101,8 +106,11 @@ public final class DictationController {
     /// Text that will not change, and the word still being recognised.
     public private(set) var committed = ""
     public private(set) var partial = ""
-    /// The editable text after Stop.
+    /// The editable text while paused and after Stop.
     public var editedText = ""
+    /// The text as of the pause, before any edit: Resume and Stop hand an edit to the session only if
+    /// `editedText` differs from it.
+    var pausedText = ""
     /// Seconds spent listening in this dictation.
     public private(set) var elapsed: TimeInterval = 0
     /// Microphone level, 0...1, while listening.
@@ -142,7 +150,8 @@ public final class DictationController {
         self.clipboard = clipboard
     }
 
-    public var text: String { committed + partial }
+    /// The text shown: live while listening, the editable text while paused or stopped.
+    public var text: String { phase == .paused || phase == .done ? editedText : committed + partial }
     public var wordCount: Int { (phase == .done ? editedText : text).split(whereSeparator: \.isWhitespace).count }
     public var isModelReady: Bool { factory != nil && loadedModel == model }
     /// The model menu is usable when no dictation is in progress.
@@ -180,7 +189,8 @@ public final class DictationController {
 
     // MARK: Panel
 
-    /// The panel opened: every opening starts a new dictation (the previous one ended when the panel closed).
+    /// The panel opened: a new dictation starts, unless one is paused (closing the panel keeps a paused
+    /// dictation; every other one ended when the panel closed).
     public func panelOpened() async {
         isPanelOpen = true
         switch phase {
@@ -191,14 +201,14 @@ public final class DictationController {
         }
     }
 
-    /// The panel closed: the dictation ends. The microphone stops at once, the text goes to the history, and
-    /// the next opening starts afresh.
+    /// The panel closed: a paused dictation is kept for the next opening. Any other dictation ends: the
+    /// microphone stops at once, the text goes to the history, and the next opening starts afresh.
     public func panelClosed() {
         isPanelOpen = false
         startWhenReady = false
         switch phase {
-        case .listening, .paused:
-            if phase == .listening { stopMicrophone() }
+        case .listening:
+            stopMicrophone()
             let s = session, shown = text, choice = model
             session = nil
             updatesTask?.cancel()
@@ -228,6 +238,20 @@ public final class DictationController {
 
     public func clearHistory() { history.removeAll() }
 
+    /// The app is quitting: whatever is dictated or edited goes to the history (synchronously, with the text
+    /// as shown; a listening session's last words are not waited for).
+    public func finishForQuit() {
+        switch phase {
+        case .listening, .paused, .done:
+            if phase == .listening { stopMicrophone() }
+            archive(text, model: model, copied: false)
+            session = nil
+            reset()
+        default:
+            break
+        }
+    }
+
     /// Asks for microphone access up front (at launch), so the prompt never appears in the middle of a click.
     public func requestMicrophoneAccessIfNeeded() async {
         if !permission.isGranted && !permission.isDenied { _ = await permission.request() }
@@ -250,7 +274,7 @@ public final class DictationController {
             let s = try factory!.makeSession()
             let t1 = Date()
             session = s
-            committed = ""; partial = ""; editedText = ""; elapsed = 0; elapsedBefore = 0
+            committed = ""; partial = ""; editedText = ""; pausedText = ""; elapsed = 0; elapsedBefore = 0
             updatesTask?.cancel()
             updatesTask = Task { [weak self] in
                 for await u in s.updates {
@@ -318,22 +342,39 @@ public final class DictationController {
 
     func updateElapsed() { if let t = listenStart { elapsed = elapsedBefore + Date().timeIntervalSince(t) } }
 
+    /// Pause: the microphone stops and the text becomes editable. It shows at once; the last words, which
+    /// the session finishes a moment later, are added unless the user has already started editing.
     public func pause() {
         guard phase == .listening, let s = session else { return }
         stopMicrophone()
         s.pause()
+        let shown = committed + partial
+        editedText = shown; pausedText = shown
         phase = .paused
+        Task {
+            let full = await s.settledText()
+            guard self.session === s, self.phase == .paused, self.pausedText == shown else { return }
+            if self.editedText == shown { self.editedText = full }
+            self.pausedText = full
+        }
     }
 
+    /// Resume: an edit made while paused replaces the text so far, and new words are appended to it.
     public func resume() {
         guard phase == .paused, isPanelOpen, let s = session else { return }
+        handOverEdit(s)
+        committed = editedText; partial = ""
         s.resume()
         do { try startMicrophone(s); phase = .listening } catch { phase = .failed("Couldn’t start the microphone: \(error)") }
     }
 
+    func handOverEdit(_ s: DictationSessionType) {
+        if editedText != pausedText { s.replaceText(editedText) }
+    }
+
     public func stop() async {
         guard phase == .listening || phase == .paused, let s = session else { return }
-        if phase == .listening { stopMicrophone() }
+        if phase == .listening { stopMicrophone() } else { handOverEdit(s) }
         let final = await s.stop()
         updatesTask?.cancel()
         session = nil
@@ -373,7 +414,7 @@ public final class DictationController {
     }
 
     func reset() {
-        committed = ""; partial = ""; editedText = ""; elapsed = 0; elapsedBefore = 0
+        committed = ""; partial = ""; editedText = ""; pausedText = ""; elapsed = 0; elapsedBefore = 0
         phase = .idle
     }
 }

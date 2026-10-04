@@ -184,6 +184,24 @@ public final class DictationSession: @unchecked Sendable {
         }
     }
 
+    /// The text of the finished segments once every earlier call has run: after `pause`, the whole text,
+    /// last words included.
+    public func settledText() async -> String {
+        await withCheckedContinuation { (c: CheckedContinuation<String, Never>) in
+            queue.async { c.resume(returning: self.joined(self.segments)) }
+        }
+    }
+
+    /// While paused: replaces the text so far (the user edited it). Resume appends new words after it, and
+    /// `stop` returns it plus those words.
+    public func replaceText(_ text: String) {
+        queue.async {
+            guard self.streamer == nil, !self.finished else { return }
+            self.segments = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [text]
+            self.publish()
+        }
+    }
+
     /// Starts a new segment after `pause`.
     public func resume() {
         queue.async {
@@ -215,7 +233,11 @@ public final class DictationSession: @unchecked Sendable {
         streamer = nil
     }
 
-    func joined(_ parts: [String]) -> String { parts.joined(separator: " ") }
+    /// Segments joined with a space, unless the text before already ends in whitespace (an edited segment
+    /// may end in a newline).
+    func joined(_ parts: [String]) -> String { parts.reduce("") { $0 + Self.separator(after: $0) + $1 } }
+
+    static func separator(after text: String) -> String { text.isEmpty || text.last!.isWhitespace ? "" : " " }
 
     func publish() {
         var committed = joined(segments)
@@ -226,10 +248,10 @@ public final class DictationSession: @unchecked Sendable {
                 // The last word may still grow until the next word starts.
                 if let sp = t.lastIndex(of: " ") {
                     let done = String(t[...sp])
-                    committed += (committed.isEmpty ? "" : " ") + done
+                    committed += Self.separator(after: committed) + done
                     partial = String(t[t.index(after: sp)...])
                 } else {
-                    if !committed.isEmpty { committed += " " }
+                    committed += Self.separator(after: committed)
                     partial = t
                 }
             }

@@ -77,4 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // would close the panel mid-start.
         Task { await controller.requestMicrophoneAccessIfNeeded() }
     }
+
+    /// Quitting keeps a paused or unfinished dictation's text in the history.
+    func applicationWillTerminate(_ notification: Notification) {
+        controller?.finishForQuit()
+    }
 }

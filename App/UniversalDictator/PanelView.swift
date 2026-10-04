@@ -7,6 +7,11 @@ import UniversalDictatorKit
 struct PanelView: View {
     @Bindable var controller: DictationController
     let close: () -> Void
+    /// Whether the text editor (paused or stopped) has the keyboard: Space and Return then type, rather than
+    /// pressing Resume and Stop.
+    @FocusState var editing: Bool
+
+    var isEditable: Bool { controller.phase == .paused || controller.phase == .done }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -14,8 +19,8 @@ struct PanelView: View {
             content
                 .frame(height: 150)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .textBackgroundColor)))
-                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(controller.phase == .done ? Color.accentColor : Color(nsColor: .separatorColor),
-                                                                       lineWidth: controller.phase == .done ? 2 : 1))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(isEditable ? Color.accentColor : Color(nsColor: .separatorColor),
+                                                                       lineWidth: isEditable ? 2 : 1))
             footer.frame(height: 26)
         }
         .padding(.horizontal, 14)
@@ -56,13 +61,13 @@ struct PanelView: View {
 
     @ViewBuilder var content: some View {
         switch controller.phase {
-        case .idle, .listening, .paused:
+        case .idle, .listening:
+            // Live text: not selectable, so no highlight ever shows while words arrive.
             ScrollViewReader { proxy in
                 ScrollView {
                     (Text(controller.committed) + Text(controller.partial).foregroundStyle(.tertiary))
                         .font(.system(size: 14))
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
                         .padding(10)
                         .id("end")
                 }
@@ -70,15 +75,15 @@ struct PanelView: View {
             }
             .overlay {
                 if controller.text.isEmpty {
-                    Text(controller.phase == .paused ? "Paused" : "Listening…")
-                        .font(.system(size: 13)).foregroundStyle(.tertiary)
+                    Text("Listening…").font(.system(size: 13)).foregroundStyle(.tertiary)
                 }
             }
-        case .done:
+        case .paused, .done:
             TextEditor(text: $controller.editedText)
                 .font(.system(size: 14))
                 .scrollContentBackground(.hidden)
                 .padding(6)
+                .focused($editing)
         case .preparing:
             VStack(spacing: 10) {
                 Text("Getting things ready for you…").font(.system(size: 13, weight: .semibold))
@@ -124,12 +129,14 @@ struct PanelView: View {
                 if controller.phase == .listening {
                     Button("Pause") { controller.pause() }.keyboardShortcut(.space, modifiers: [])
                 } else {
-                    Button("Resume") { controller.resume() }.keyboardShortcut(.space, modifiers: [])
+                    Button("Resume") { controller.resume() }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(editing ? nil : KeyboardShortcut(.space, modifiers: []))
                 }
                 Button("Stop") { Task { await controller.stop() } }
                     .tint(.red)
                     .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.return, modifiers: [])
+                    .keyboardShortcut(editing ? nil : KeyboardShortcut(.return, modifiers: []))
             case .done:
                 Text("\(controller.wordCount) words · \(clock(controller.elapsed))")
                     .font(.system(size: 12, weight: .medium)).foregroundStyle(.secondary).monospacedDigit()

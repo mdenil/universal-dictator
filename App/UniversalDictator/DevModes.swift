@@ -5,8 +5,8 @@ import UniversalDictatorKit
 
 // Development launch modes, for checking the app without clicking through it:
 //   UniversalDictator --selftest <audio> [--model nemotron160|nemotron560]
-//       runs <audio> through the app's controller and bundled models, with a pause and resume halfway,
-//       prints the final text and exits.
+//       runs <audio> through the app's controller and bundled models. Halfway it pauses, closes and reopens
+//       the panel, edits the paused text (prefixes "[edited] ") and resumes; prints the final text and exits.
 //   UniversalDictator --snapshot <dir>
 //       renders the panel in each state to <dir>/<state>.png with stand-in sessions and exits.
 enum DevModes {
@@ -75,9 +75,14 @@ enum DevModes {
             await c.panelOpened()
             log("phase after opening: \(c.phase)")
             while input.position < audio.count / 2 { try await Task.sleep(for: .milliseconds(10)) }
-            c.panelClosed()                                       // closing the panel pauses
+            c.pause()
+            try await Task.sleep(for: .milliseconds(300))
             log("paused at \(String(format: "%.1f", Double(input.position) / 16000)) s: \(c.text)")
-            await c.panelOpened()                                 // reopening resumes
+            c.panelClosed()                                       // a paused dictation survives closing
+            await c.panelOpened()
+            log("phase after closing and reopening: \(c.phase)")
+            c.editedText = "[edited] " + c.editedText
+            c.resume()
             while !input.finished { try await Task.sleep(for: .milliseconds(20)) }
             try await Task.sleep(for: .milliseconds(300))
             await c.stop()
@@ -96,10 +101,13 @@ enum DevModes {
         let final: String
         init(final: String) { self.final = final; (updates, cont) = AsyncStream<TranscriptUpdate>.makeStream() }
         func push(_ samples: [Float]) {}
+        var said = ""
         func pause() {}
+        func settledText() async -> String { said }
+        func replaceText(_ text: String) { said = text }
         func resume() {}
         func stop() async -> String { cont.finish(); return final }
-        func say(_ c: String, _ p: String) { cont.yield(TranscriptUpdate(committed: c, partial: p, isPaused: false, isFinished: false)) }
+        func say(_ c: String, _ p: String) { said = c + p; cont.yield(TranscriptUpdate(committed: c, partial: p, isPaused: false, isFinished: false)) }
     }
     final class StandInFactory: SessionFactory, @unchecked Sendable {
         var last: StandInSession?
