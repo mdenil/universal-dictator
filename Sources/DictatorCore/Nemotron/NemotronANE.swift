@@ -52,6 +52,17 @@ public final class NemotronANEEncoder: NemotronEncoder {
         return m
     }
 
+    /// Releases every loaded model except this latency's, so only one model's weights stay in memory.
+    /// Streams already running keep theirs until they end.
+    public static func keepOnly(_ schedule: NemotronSchedule) {
+        let n = modelNames(schedule)
+        let keep = Set([n.sub, n.state].compactMap { $0 }.map { $0 + ".mlmodelc" })
+        lock.lock(); defer { lock.unlock() }
+        loaded = loaded.filter { key, _ in
+            keep.contains(URL(fileURLWithPath: String(key.split(separator: "|").first ?? "")).lastPathComponent)
+        }
+    }
+
     /// Whether the Core ML models for this latency are present.
     public static func available(assets: ModelAssets, schedule: NemotronSchedule) -> Bool {
         let n = modelNames(schedule)

@@ -463,18 +463,17 @@ final class DictationControllerTests: XCTestCase {
 
     // MARK: Models
 
-    /// Switching away and back doesn't load the first model again.
-    func testSwitchingBackReusesTheLoadedModel() async {
+    /// Switching models loads the new one and lets go of the old: switching back loads it again.
+    func testSwitchingLoadsOnlyTheChosenModel() async {
         let counter = LoadCounter()
         let c = DictationController(model: .nemotron160, loader: FakeLoader(factory: factory, counter: counter), microphone: mic,
                                     permission: FakePermission(), clipboard: clip)
-        c.loadModel()
-        for _ in 0..<50 where c.phase == .preparing { try? await Task.sleep(for: .milliseconds(5)) }
-        c.selectModel(.nemotron560)
-        for _ in 0..<50 where c.phase == .preparing { try? await Task.sleep(for: .milliseconds(5)) }
-        c.selectModel(.nemotron160)
+        func ready() async { for _ in 0..<50 where c.phase == .preparing { try? await Task.sleep(for: .milliseconds(5)) } }
+        c.loadModel(); await ready()
+        c.selectModel(.nemotron560); await ready()
+        c.selectModel(.nemotron160); await ready()
         XCTAssertEqual(c.phase, .idle); XCTAssertTrue(c.isModelReady)
-        XCTAssertEqual(counter.loads, [.nemotron160, .nemotron560])
+        XCTAssertEqual(counter.loads, [.nemotron160, .nemotron560, .nemotron160])
     }
 
     func testModelCantChangeWhilePaused() async {

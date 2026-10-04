@@ -76,6 +76,9 @@ public enum Engine {
         try await Task.detached(priority: .userInitiated) {
             let missing = assets.missingFiles(for: choice)
             guard missing.isEmpty else { throw EngineError.io("missing model files in \(assets.directory.path): \(missing.joined(separator: ", "))") }
+            // One model in memory at a time: switching drops the other (reloading it later takes under a second
+            // once its Neural Engine compile is cached on disk).
+            NemotronANEEncoder.keepOnly(choice.schedule)
             let w = try SafeTensorsReader(assets.decoderWeights!)
             let decoder = try RNNTDecoder(weights: w)
             let frontend = NemoMelFrontend(filterbank: try w.floats("preprocessor.featurizer.fb"),

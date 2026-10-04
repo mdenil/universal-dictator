@@ -45,7 +45,7 @@ reference/nemo/.venv/bin/python reference/nemo/export_weights.py models/parakeet
 
 ## The Mac app
 
-Universal Dictator is a menu-bar app: click the waveform icon next to the clock, speak, then copy the text. It runs Nemotron on the Neural Engine only and links `DictatorCore` (no Metal). The plan is `APP_PLAN.md`; the design is in Figma ([Universal Dictator — App UI](https://www.figma.com/design/RYBeO9fxHFk9C7WMtVS6Tl)).
+Universal Dictator is a menu-bar app: click the waveform icon next to the clock, speak, then copy the text. It runs Nemotron on the Neural Engine only and links `DictatorCore` (no Metal). The plans are `APP_PLAN.md` and `UX_PLAN.md`; the design is in Figma ([Universal Dictator — App UI](https://www.figma.com/design/RYBeO9fxHFk9C7WMtVS6Tl)).
 
 ```sh
 # 1. The app's model folder (Core ML models from reference/coreml/nemotron_ane.py --stateful, decoder weights, tokenizer)
@@ -58,23 +58,26 @@ open build/DerivedData/Build/Products/Release/UniversalDictator.app
 
 Using it:
 
-- **Click the icon:** the panel opens and listening starts. Words appear about 0.3 s after you say them; the grey word is still being recognised.
-- **⌘C** stops, copies the whole text and closes the panel: click, talk, ⌘C, then ⌘V wherever you want it.
-- **Space** pauses and resumes. **Copy so far** copies the text without stopping.
-- **Closing the panel** (clicking away, or the icon) ends the dictation; the next click always starts a new one. Finished dictations are kept in a history (this session only, for now).
-- **Return** (or Stop) ends the dictation; the text becomes editable.
-- **Copy** (⌘Return) copies the edited text and closes the panel; focus returns to the app you were in, ready for ⌘V. **New** starts again.
-- **The model menu** (top right) switches between Nemotron 160 ms and 560 ms.
-- **Right-click the icon** for Quit.
+- **Click the icon:** the panel opens and listening starts; the icon turns red. Words appear about 0.3 s after you say them; the grey word is still being recognised.
+- **Copy ⌘C** (the button or the shortcut) stops, copies the whole text and closes the panel: click, talk, ⌘C, then ⌘V wherever you want it.
+- **Space** (or Pause) pauses; the icon turns yellow and the text becomes editable. **Resume** keeps your edits and adds new words after them. A paused dictation survives closing the panel: the next click reopens it, still paused.
+- **Return** (or Stop) ends the dictation; the text stays editable. **Copy** (⌘Return) copies it and closes the panel; focus returns to the app you were in, ready for ⌘V. **New** starts again.
+- **Closing the panel** (clicking away, or the icon) otherwise ends the dictation; the next click starts a new one.
+- **Right-click the icon** for the five latest dictations (choosing one copies it), Show All History…, Settings… and Quit.
+- **History** keeps the last 50 dictations (10–200 in Settings), saved on this Mac in `~/Library/Application Support/dev.universaldictator.UniversalDictator/history.json`. The History window searches them and has Copy, Edit and Delete for each.
+- **Settings** (right-click → Settings…, or ⌘, while the panel is open): the model, **Fast** (Nemotron 160 ms) or **Accurate** (Nemotron 560 ms), the history length, and Clear History….
 
-At launch the app prepares the selected model for the Neural Engine in the background: about half a minute the first time after installing or updating (Core ML then caches it per macOS version), a few seconds after that. Clicking meanwhile shows "Getting ready" and dictation starts by itself when it is ready. The app asks for microphone access on the first click.
+At launch the app prepares the selected model for the Neural Engine in the background: about half a minute the first time after installing or updating (Core ML then caches it per macOS version), under a second after that. Clicking meanwhile shows "Getting things ready for you…" and dictation starts by itself when it is ready. Only the chosen model is kept in memory. Switching prepares the other one the same way the first time it is used on this Mac; after that, switching takes under a second. The app asks for microphone access at launch.
 
 Checks without clicking through the app:
 
 ```sh
 APP=build/DerivedData/Build/Products/Release/UniversalDictator.app/Contents/MacOS/UniversalDictator
-$APP --selftest /path/to/audio.flac --model nemotron160    # the app's controller and bundled models on a file, with a pause/resume
-$APP --snapshot /tmp/panel-states                          # renders every panel state to PNG
+$APP --selftest /path/to/audio.flac --model nemotron160    # the app's controller and bundled models on a file; pauses, closes and
+                                                            # reopens the panel, edits the paused text and resumes
+$APP --snapshot /tmp/panel-states                          # renders every panel state, Settings and History to PNG
+$APP --measure-switch                                      # model load and switch times, and memory
+$APP --diagnose-start                                      # opens the panel twice for real: start timing, icon position
 .build/release/dictate-cli dictate audio.flac --pause-at 5  # the same code path from the CLI
 swift test                                                  # engine, core (Neural Engine) and app-logic tests
 ```

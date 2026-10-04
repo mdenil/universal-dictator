@@ -115,8 +115,6 @@ public final class DictationController {
     }
     public static let historyLimits = [10, 25, 50, 100, 200]
     let historyStore: HistoryStore
-    /// Loaded models by choice: switching back to a model loaded earlier in this run is immediate.
-    var loadedModels: [ModelChoice: SessionFactory] = [:]
 
     let loader: ModelLoader
     let microphone: AudioInput
@@ -163,18 +161,11 @@ public final class DictationController {
         factory = nil
         loadedModel = nil
         let choice = model
-        if let f = loadedModels[choice] {
-            factory = f
-            loadedModel = choice
-            if isFailure { phase = .idle }
-            return
-        }
         if phase == .idle || phase == .done || isFailure { phase = .preparing }
         loadTask = Task {
             do {
                 let f = try await loader.load(choice)
                 guard !Task.isCancelled, choice == self.model else { return }
-                self.loadedModels[choice] = f
                 self.factory = f
                 self.loadedModel = choice
                 if self.phase == .preparing { self.phase = self.text.isEmpty && self.editedText.isEmpty ? .idle : .done }
