@@ -12,6 +12,8 @@ import UniversalDictatorKit
 //       loads Fast, then Accurate, then switches back through the app's controller, printing each step's
 //       time and the process's memory footprint, and exits. Run it twice: the second run shows loads with
 //       the Neural Engine compile already cached on disk.
+//   UniversalDictator --check-accessibility
+//       prints whether this app may type into other apps, and exits.
 //   UniversalDictator --typing-test
 //       types into a test window of its own by each route (HID tap, session tap, the front app), with no key
 //       held, with Shift held and with ⌃⌥ held (simulated for under half a second), and prints what arrived.
@@ -34,6 +36,10 @@ enum DevModes {
             let choice = argument(after: "--model").flatMap(ModelChoice.init(rawValue:)) ?? .nemotron160
             Task { await selftest(audio: URL(fileURLWithPath: audio), choice: choice, assets: assets); exit(0) }
             return true
+        }
+        if CommandLine.arguments.contains("--check-accessibility") {
+            print(AXIsProcessTrusted() ? "allowed" : "not allowed")
+            exit(0)
         }
         if CommandLine.arguments.contains("--typing-test") {
             Task { await typingTest(); exit(0) }

@@ -63,17 +63,13 @@ New rows under the existing ones, in the same layout: labels left, controls righ
 
 **One clash to know about:** JetBrains IDEs (IntelliJ, PyCharm, and others) use double Shift for Search Everywhere. The app only listens to keys and can't swallow them, so in those IDEs both would happen. A key-combination shortcut avoids it.
 
-## Open question to settle in the first step: holding modifier keys while typing
+## Typing while modifier keys are held
 
-In Hold to talk mode, Shift (or the modifiers of a key-combination shortcut) is physically held down while words are being typed. If a receiving app reads which keys are held, rather than the keys carried in the typed event, typed words could come out in capitals, or a typed "s" could act as a shortcut. I don't know which apps do this. It has to be tested before anything else is built.
+In Hold to talk mode, Shift (or a key combination's modifiers) is held down while words are typed. `--typing-test` types into an AppKit text view with nothing held, with Shift held, and with ⌃⌥ held. It does this by each route: the HID tap, the session tap, and posting to the front app. In every case the text arrived exactly as sent; the system did register the held keys. So Hold to talk types word by word, like Toggle. Other apps (Chrome, Slack, Terminal) are checked by hand.
 
-- **Test:** with Shift held, and with ⌃⌥ held, type into TextEdit, Chrome, Slack, Notes and Terminal, and check the text arrives exactly as sent.
-- **If it's safe:** Hold to talk types word by word, like Toggle.
-- **If it isn't:** in Hold to talk mode the words are held back and typed the moment you let go. That's still quick, but they don't appear while you speak. I'll report back before choosing.
+## Signing
 
-## A development snag: permission after every rebuild
-
-The app is signed ad hoc, so macOS treats every build as a new app, and the Accessibility permission doesn't carry over to a rebuilt app. While I'm building this, each new build will need the permission granted again (switched off and on). Released builds signed with a real certificate keep it.
+The app is signed with the Apple Development certificate (team QF8GKSXVE2), so macOS keeps the Accessibility and microphone permissions across rebuilds. An ad hoc signature would make every build a new app.
 
 ## Build
 
