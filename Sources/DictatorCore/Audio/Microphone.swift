@@ -2,10 +2,11 @@ import AVFoundation
 import Foundation
 
 /// Captures the default input device as 16 kHz mono float samples and delivers them in small blocks
-/// on a background queue.
+/// on a background queue. `stop` delivers the last samples before returning.
 public final class Microphone {
     let engine = AVAudioEngine()
     var converter: AVAudioConverter?
+    var onSamples: (([Float]) -> Void)?
     let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false)!
 
     public init() {}
@@ -15,6 +16,7 @@ public final class Microphone {
         let fmt = input.outputFormat(forBus: 0)
         guard let conv = AVAudioConverter(from: fmt, to: target) else { throw EngineError.io("no converter from \(fmt)") }
         converter = conv
+        self.onSamples = onSamples
         input.installTap(onBus: 0, bufferSize: 1024, format: fmt) { [weak self] buf, _ in
             guard let self = self else { return }
             let cap = AVAudioFrameCount(Double(buf.frameLength) * 16000 / fmt.sampleRate) + 16
@@ -34,9 +36,23 @@ public final class Microphone {
         try engine.start()
     }
 
+    /// Stops capturing. The resampler still holds a few milliseconds of the last audio: they are delivered
+    /// (on the calling thread) before this returns, so nothing said before the stop is lost.
     public func stop() {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
+        if let conv = converter, let deliver = onSamples, let out = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: 4096) {
+            var err: NSError?
+            conv.convert(to: out, error: &err) { _, status in
+                status.pointee = .endOfStream
+                return nil
+            }
+            if out.frameLength > 0 {
+                deliver(Array(UnsafeBufferPointer(start: out.floatChannelData![0], count: Int(out.frameLength))))
+            }
+        }
+        converter = nil
+        onSamples = nil
     }
 }
 

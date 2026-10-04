@@ -131,6 +131,8 @@ public final class DictationController {
     var listenStart: Date?
     var elapsedBefore: TimeInterval = 0
     var tick: Timer?
+    /// A stop is waiting for the microphone and the session to finish.
+    var stopping = false
 
     /// Where the microphone is started and stopped. Starting can take a second or two (waking the audio
     /// device), so the app passes a serial background queue and the panel draws at once; starts and stops
@@ -209,12 +211,13 @@ public final class DictationController {
         startWhenReady = false
         switch phase {
         case .listening:
-            stopMicrophone()
+            let stopped = stopMicrophone()
             let s = session, shown = text, choice = model
             session = nil
             updatesTask?.cancel()
             reset()
             Task {
+                await stopped.value                      // the microphone's last audio reaches the session first
                 let final = await s?.stop() ?? shown
                 self.archive(final, model: choice, copied: false)
             }
@@ -369,10 +372,29 @@ public final class DictationController {
         }
     }
 
-    func stopMicrophone(timed: Bool = true) {
+    /// Stops the microphone. It hands over the audio it captured last while stopping, so a session must not
+    /// finish (stop or pause) until it has: the returned task completes then. `wait` blocks until then instead
+    /// (for pause, whose session calls must stay in order with a resume).
+    @discardableResult
+    func stopMicrophone(timed: Bool = true, wait: Bool = false) -> Task<Void, Never> {
         let mic = microphone
-        if let q = microphoneQueue { q.async { mic.stop() } } else { mic.stop() }
-        guard timed else { return }
+        let stopped: Task<Void, Never>
+        if let q = microphoneQueue {
+            if wait {
+                q.sync { mic.stop() }
+                stopped = Task {}
+            } else {
+                stopped = Task.detached { await withCheckedContinuation { c in q.async { mic.stop(); c.resume() } } }
+            }
+        } else {
+            mic.stop()
+            stopped = Task {}
+        }
+        defer { if timed { stopTimer() } }
+        return stopped
+    }
+
+    func stopTimer() {
         tick?.invalidate(); tick = nil
         if let t = listenStart { elapsedBefore += Date().timeIntervalSince(t) }
         listenStart = nil
@@ -386,7 +408,7 @@ public final class DictationController {
     /// the session finishes a moment later, are added unless the user has already started editing.
     public func pause() {
         guard phase == .listening, let s = session else { return }
-        stopMicrophone()
+        stopMicrophone(wait: true)
         s.pause()
         let shown = committed + partial
         editedText = shown; pausedText = shown
@@ -413,8 +435,10 @@ public final class DictationController {
     }
 
     public func stop() async {
-        guard phase == .listening || phase == .paused, let s = session else { return }
-        if phase == .listening { stopMicrophone() } else { handOverEdit(s) }
+        guard phase == .listening || phase == .paused, let s = session, !stopping else { return }
+        stopping = true
+        defer { stopping = false }
+        if phase == .listening { await stopMicrophone().value } else { handOverEdit(s) }
         let final = await s.stop()
         updatesTask?.cancel()
         session = nil
@@ -496,7 +520,7 @@ public final class DictationController {
     public func stopDirectDictation() async {
         guard isDirectDictating, let s = directSession, let typer else { return }
         isDirectDictating = false
-        stopMicrophone(timed: false)
+        await stopMicrophone(timed: false).value
         let final = await s.stop()
         directUpdates?.cancel()
         directSession = nil

@@ -12,13 +12,17 @@ final class FakeSession: DictationSessionType, @unchecked Sendable {
     /// What a pause finishes the text to (the last words); nil: the text said last.
     var flushed: String?
     var replaced: [String] = []
+    /// Samples pushed after `stop` or `pause` was called (they would be lost).
+    var latePushes = 0
+    var ended = false
     init() { (updates, cont) = AsyncStream<TranscriptUpdate>.makeStream() }
-    func push(_ samples: [Float]) { pushed += samples.count }
-    func pause() { pauses += 1 }
+    func push(_ samples: [Float]) { pushed += samples.count; if ended { latePushes += samples.count } }
+    func pause() { pauses += 1; ended = true }
     func settledText() async -> String { flushed ?? said }
     func replaceText(_ text: String) { replaced.append(text); said = text }
-    func resume() { resumes += 1 }
+    func resume() { resumes += 1; ended = false }
     func stop() async -> String {
+        ended = true
         let f = final ?? said
         cont.yield(TranscriptUpdate(committed: f, partial: "", isPaused: false, isFinished: true)); cont.finish(); return f
     }
@@ -482,5 +486,65 @@ final class DictationControllerTests: XCTestCase {
         c.pause()
         c.selectModel(.nemotron560)
         XCTAssertEqual(c.model, .nemotron160)
+    }
+
+    // MARK: The last words
+
+    /// A microphone that, like the real one, hands over its last captured audio while stopping (on its own queue).
+    final class TailMic: AudioInput, @unchecked Sendable {
+        var callback: (([Float]) -> Void)?
+        func start(_ onSamples: @escaping ([Float]) -> Void) throws { callback = onSamples }
+        func stop() { usleep(30_000); callback?([Float](repeating: 0.1, count: 1600)); callback = nil }
+    }
+
+    func tailController() async -> DictationController {
+        let c = DictationController(model: .nemotron160, loader: FakeLoader(factory: factory), microphone: TailMic(), permission: FakePermission(),
+                                    clipboard: clip, microphoneQueue: DispatchQueue(label: "test-mic"))
+        c.loadModel()
+        for _ in 0..<50 where c.phase == .preparing { try? await Task.sleep(for: .milliseconds(5)) }
+        return c
+    }
+
+    /// Stop waits for the microphone's last audio before the session finishes, so the last word is kept.
+    func testStopKeepsTheLastAudio() async {
+        let c = await tailController()
+        await c.panelOpened()
+        try? await Task.sleep(for: .milliseconds(50))
+        await c.stop()
+        XCTAssertEqual(factory.sessions[0].pushed, 1600); XCTAssertEqual(factory.sessions[0].latePushes, 0)
+    }
+
+    func testPauseKeepsTheLastAudio() async {
+        let c = await tailController()
+        await c.panelOpened()
+        try? await Task.sleep(for: .milliseconds(50))
+        c.pause()
+        XCTAssertEqual(factory.sessions[0].pushed, 1600); XCTAssertEqual(factory.sessions[0].latePushes, 0)
+    }
+
+    func testCopyKeepsTheLastAudio() async {
+        let c = await tailController()
+        await c.panelOpened()
+        try? await Task.sleep(for: .milliseconds(50))
+        await c.stopAndCopy()
+        XCTAssertEqual(factory.sessions[0].latePushes, 0); XCTAssertEqual(factory.sessions[0].pushed, 1600)
+    }
+
+    func testClosingKeepsTheLastAudio() async {
+        let c = await tailController()
+        await c.panelOpened()
+        try? await Task.sleep(for: .milliseconds(50))
+        c.panelClosed()
+        try? await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(factory.sessions[0].latePushes, 0); XCTAssertEqual(factory.sessions[0].pushed, 1600)
+    }
+
+    func testDirectDictationKeepsTheLastAudio() async {
+        let c = await tailController()
+        c.enableDirectDictation(typer: FakeTyper(), accessibility: FakeAccessibility())
+        _ = await c.startDirectDictation()
+        try? await Task.sleep(for: .milliseconds(50))
+        await c.stopDirectDictation()
+        XCTAssertEqual(factory.sessions[0].latePushes, 0); XCTAssertEqual(factory.sessions[0].pushed, 1600)
     }
 }
