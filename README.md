@@ -66,7 +66,7 @@ Using it:
 - **The model menu** (top right) switches between Nemotron 160 ms and 560 ms.
 - **Right-click the icon** for Quit.
 
-The first launch after a build compiles the models for the Neural Engine (up to about a minute; the panel says so). The app asks for microphone access on the first click.
+At launch the app prepares the selected model for the Neural Engine in the background: about half a minute the first time after installing or updating (Core ML then caches it per macOS version), a few seconds after that. Clicking meanwhile shows "Getting ready" and dictation starts by itself when it is ready. The app asks for microphone access on the first click.
 
 Checks without clicking through the app:
 

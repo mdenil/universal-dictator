@@ -81,9 +81,9 @@ struct PanelView: View {
                 .padding(6)
         case .preparing:
             VStack(spacing: 10) {
-                Text("Loading \(controller.model.displayName)…").font(.system(size: 13, weight: .medium))
+                Text("Getting ready…").font(.system(size: 13, weight: .semibold))
                 ProgressView().controlSize(.small)
-                Text("The first launch after installing compiles the model for the Neural Engine, which takes about a minute.")
+                Text("Preparing the speech model for this Mac’s Neural Engine. This happens once after installing or updating and takes about half a minute. Dictation starts by itself as soon as it’s ready.")
                     .font(.system(size: 11)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             .padding(14)

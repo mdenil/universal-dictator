@@ -126,7 +126,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
             switch controller.phase {
             case .listening: name = "waveform.badge.mic"
             case .paused: name = "pause.circle"
-            case .preparing: name = "hourglass"
+            case .preparing: name = "waveform"           // unchanged while the model gets ready
             case .microphoneDenied, .failed: name = "exclamationmark.triangle"
             default: name = "waveform"
             }
