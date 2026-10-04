@@ -125,41 +125,42 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
 
     // MARK: Windows
 
-    var settingsWindow: NSPanel?
-    var historyWindow: NSPanel?
+    var settingsWindow: NSWindow?
+    var historyWindow: NSWindow?
+    /// While Settings or History is open the app is an ordinary app (Dock icon, ⌘Tab, menus); after the last
+    /// one closes it goes back to living in the menu bar.
+    lazy var windowPresence = WindowPresence { [weak self] in [self?.settingsWindow, self?.historyWindow].compactMap { $0 } }
 
     @objc func showSettings() {
         if settingsWindow == nil {
             settingsWindow = Self.window(title: "Settings", content: SettingsView(controller: controller, direct: direct), resizable: false)
         }
-        Self.present(settingsWindow!)
+        present(settingsWindow!)
     }
 
     @objc func showHistory() {
         if historyWindow == nil {
             historyWindow = Self.window(title: "History", content: HistoryView(controller: controller), resizable: true)
         }
-        Self.present(historyWindow!)
+        present(historyWindow!)
     }
 
-    /// A titled window that takes the keyboard without activating the app, like the drop-down panel (an
-    /// active menu-bar app can push status icons behind the notch).
-    static func window<Content: View>(title: String, content: Content, resizable: Bool) -> NSPanel {
-        var style: NSWindow.StyleMask = [.titled, .closable, .nonactivatingPanel]
+    /// An ordinary titled window.
+    static func window<Content: View>(title: String, content: Content, resizable: Bool) -> NSWindow {
+        var style: NSWindow.StyleMask = [.titled, .closable, .miniaturizable]
         if resizable { style.insert(.resizable) }
-        let w = NSPanel(contentRect: .zero, styleMask: style, backing: .buffered, defer: true)
+        let w = NSWindow(contentRect: .zero, styleMask: style, backing: .buffered, defer: true)
         w.title = title
         w.contentViewController = NSHostingController(rootView: content)
         w.isReleasedWhenClosed = false
-        w.hidesOnDeactivate = false
-        w.becomesKeyOnlyIfNeeded = false
         w.center()
         return w
     }
 
-    static func present(_ w: NSPanel) {
-        w.orderFrontRegardless()
-        w.makeKey()
+    /// Brings a window to the front with the app active, like any app's window.
+    func present(_ w: NSWindow) {
+        close()                                          // the drop-down panel
+        windowPresence.show(w)
     }
 
     @objc func toggle() {
@@ -170,7 +171,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
 
     // MARK: Direct dictation
 
-    /// Whether the shortcut is held down (Hold to talk stops when it's released, even mid-start).
+    /// Whether the shortcut is held down (Push to talk stops when it's released, even mid-start).
     var shortcutHeld = false
 
     func shortcutDown() {
@@ -178,7 +179,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         switch direct.mode {
         case .toggle:
             if controller.isDirectDictating { Task { await controller.stopDirectDictation() } } else { startDirect() }
-        case .holdToTalk:
+        case .pushToTalk:
             if !controller.isDirectDictating { startDirect() }
         }
     }
@@ -192,7 +193,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
 
     func shortcutUp() {
         shortcutHeld = false
-        if direct.mode == .holdToTalk, controller.isDirectDictating { Task { await controller.stopDirectDictation() } }
+        if direct.mode == .pushToTalk, controller.isDirectDictating { Task { await controller.stopDirectDictation() } }
     }
 
     func startDirect() {
@@ -208,7 +209,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
             log.notice("direct dictation start: \(String(describing: result), privacy: .public)")
             switch result {
             case .started:
-                if direct.mode == .holdToTalk, !shortcutHeld { await controller.stopDirectDictation() }
+                if direct.mode == .pushToTalk, !shortcutHeld { await controller.stopDirectDictation() }
             case .needsPanel:
                 open()
             case .needsAccessibility:
@@ -365,4 +366,25 @@ final class PanelBackground: NSVisualEffectView {
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
+}
+
+/// Makes the app an ordinary app while any of its windows is open: a Dock icon, a place in ⌘Tab, and its menus
+/// (Edit for copy and paste, Window). When the last one closes, the app goes back to the menu bar only.
+@MainActor
+final class WindowPresence: NSObject, NSWindowDelegate {
+    let windows: () -> [NSWindow]
+
+    init(windows: @escaping () -> [NSWindow]) { self.windows = windows }
+
+    func show(_ w: NSWindow) {
+        w.delegate = self
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        w.makeKeyAndOrderFront(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        let closing = notification.object as? NSWindow
+        if !windows().contains(where: { $0 !== closing && ($0.isVisible || $0.isMiniaturized) }) { NSApp.setActivationPolicy(.accessory) }
+    }
 }

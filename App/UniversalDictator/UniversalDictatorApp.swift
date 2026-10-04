@@ -9,8 +9,14 @@ struct UniversalDictatorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
-        // A menu-bar-only app (LSUIElement): no windows besides the status item's panel.
+        // A menu-bar app (LSUIElement). Its Settings and History windows are its own (MenuBarPanel); while one
+        // is open the app shows its menus, and the app menu's Settings… opens that window.
         Settings { EmptyView() }
+            .commands {
+                CommandGroup(replacing: .appSettings) {
+                    Button("Settings…") { appDelegate.menuBar?.showSettings() }.keyboardShortcut(",", modifiers: .command)
+                }
+            }
     }
 }
 

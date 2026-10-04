@@ -70,7 +70,7 @@ Using it:
 **Direct dictation** types straight into the focused text field of any app, with no window:
 
 - **Double-tap Left Shift** (the default; change it in Settings). When the microphone is live, the icon turns red and a short sound plays. Each word is then typed at the cursor as it is recognised, as if you had typed it, so the last word is there as soon as you pause.
-- **Toggle** (default): tap Shift once to stop. **Hold to talk**: Shift, Shift-hold while talking, release to stop.
+- **Toggle** (default): tap Shift once to stop. **Push to talk**: Shift, Shift-hold while talking, release to stop.
 - Stopping types the last word and a space. Each direct dictation goes to History, marked "typed". Clicking the icon during one stops it.
 - It needs the Accessibility permission (System Settings › Privacy & Security › Accessibility), which the app asks for once. Nothing is typed into password fields or apps using secure keyboard entry.
 - The plan is `DIRECT_DICTATION_PLAN.md`.

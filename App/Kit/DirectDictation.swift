@@ -60,10 +60,10 @@ public enum DirectMode: String, CaseIterable, Codable, Sendable, Identifiable {
     /// Use the shortcut to start and again to stop.
     case toggle
     /// Dictate while the shortcut is held (for a double tap: Shift, Shift-hold while talking, release).
-    case holdToTalk
+    case pushToTalk = "holdToTalk"            // the saved setting keeps its old name
 
     public var id: String { rawValue }
-    public var displayName: String { self == .toggle ? "Toggle" : "Hold to talk" }
+    public var displayName: String { self == .toggle ? "Toggle" : "Push to talk" }
 }
 
 /// Recognises a double tap of one modifier key from key events: press, release, then a second press within
@@ -81,9 +81,9 @@ public struct DoubleTapDetector {
     public enum Output: Equatable {
         /// A single quick press and release (Toggle stops a running dictation with it).
         case tap
-        /// The second press: a double tap (Toggle starts with it; Hold to talk starts).
+        /// The second press: a double tap (Toggle starts with it; Push to talk starts).
         case doubleTapDown
-        /// The release of that second press (Hold to talk stops).
+        /// The release of that second press (Push to talk stops).
         case doubleTapUp
     }
 
@@ -101,7 +101,7 @@ public struct DoubleTapDetector {
     public mutating func handle(_ event: Event) -> Output? {
         switch event {
         case .other:
-            // While the second press is held (Hold to talk), other keys don't matter: the release still stops.
+            // While the second press is held (Push to talk), other keys don't matter: the release still stops.
             if case .secondDown = state { return nil }
             state = .idle
             return nil

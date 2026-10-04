@@ -47,7 +47,7 @@ final class DoubleTapDetectorTests: XCTestCase {
                        [.doubleTapDown, .doubleTapUp])
     }
 
-    /// Hold to talk: Shift, Shift-hold while talking, release.
+    /// Push to talk: Shift, Shift-hold while talking, release.
     func testSecondPressCanBeHeld() {
         XCTAssertEqual(run([.modifierDown(.leftShift, at: 0), .modifierUp(.leftShift, at: 0.1),
                             .modifierDown(.leftShift, at: 0.3)]), [.doubleTapDown])
@@ -81,7 +81,7 @@ final class DoubleTapDetectorTests: XCTestCase {
                             .modifierDown(.leftShift, at: 0.2)]), [])
     }
 
-    /// Hold to talk: keys arriving while Shift is held (the dictation's own typing) don't stop the release
+    /// Push to talk: keys arriving while Shift is held (the dictation's own typing) don't stop the release
     /// from ending it.
     func testKeysDuringTheHeldSecondPressDontCancelTheRelease() {
         XCTAssertEqual(run([.modifierDown(.leftShift, at: 0), .modifierUp(.leftShift, at: 0.1),

@@ -315,6 +315,9 @@ enum DevModes {
         await h.panelOpened(); h.pause(); await settle()
         render(SettingsView(controller: h, direct: DirectSettings()), "8-settings-paused", dir, background: false)
         render(HistoryView(controller: h).frame(width: 520, height: 400), "9-history", dir, background: false)
+        let second = h.history[1]
+        render(HistoryView(controller: h, editingID: second.id, draft: second.text).frame(width: 520, height: 400), "9b-history-editing", dir,
+               background: false)
     }
 
     @MainActor static func render(_ c: DictationController, _ name: String, _ dir: URL) {

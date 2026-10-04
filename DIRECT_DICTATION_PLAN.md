@@ -10,7 +10,7 @@ The new UI is drafted in Figma under "Direct dictation (draft)": [Universal Dict
 2. **Speak.** Each word is typed into the focused text field as if you had typed it, as it is recognised (about 0.3 s behind your voice). A word that grows is typed as it grows: "run", then "ning". So when you pause, the last word is already there.
 3. **Stop**, in one of two modes chosen in Settings:
    - **Toggle** (default): double-tap to start, a single tap of Shift to stop. A key-combination shortcut stops with a second press.
-   - **Hold to talk**: **Shift, Shift-hold (talk), release.** Tap Shift once, press it again and keep holding while you speak; releasing it stops.
+   - **Push to talk**: **Shift, Shift-hold (talk), release.** Tap Shift once, press it again and keep holding while you speak; releasing it stops.
 
    Stopping types the last word, turns the microphone off and the icon back to normal.
 4. The dictation goes to History, marked **typed**, so the text is never lost even if it landed in the wrong place.
@@ -55,7 +55,7 @@ New rows under the existing ones, in the same layout: labels left, controls righ
 | Label | Control |
 |---|---|
 | Shortcut | a shortcut field showing **Double Left ⇧** by default. Click it, then either double-tap a modifier key (Left or Right Shift, Control, Option or Command) or press a key combination; Esc cancels. A key combination needs ⌘, ⌃ or ⌥, or is a function key (F1–F19). |
-| Mode | a menu: **Toggle** or **Hold to talk** |
+| Mode | a menu: **Toggle** or **Push to talk** |
 | Accessibility | **Allowed ✓** once granted, otherwise an **Allow…** button that opens the right System Settings page |
 
 **Double tap, precisely:**
@@ -67,7 +67,7 @@ New rows under the existing ones, in the same layout: labels left, controls righ
 
 ## Typing while modifier keys are held
 
-In Hold to talk mode, Shift (or a key combination's modifiers) is held down while words are typed. `--typing-test` types into an AppKit text view with nothing held, with Shift held, and with ⌃⌥ held. It does this by each route: the HID tap, the session tap, and posting to the front app. In every case the text arrived exactly as sent; the system did register the held keys. So Hold to talk types word by word, like Toggle. Other apps (Chrome, Slack, Terminal) are checked by hand.
+In Push to talk mode, Shift (or a key combination's modifiers) is held down while words are typed. `--typing-test` types into an AppKit text view with nothing held, with Shift held, and with ⌃⌥ held. It does this by each route: the HID tap, the session tap, and posting to the front app. In every case the text arrived exactly as sent; the system did register the held keys. So Push to talk types word by word, like Toggle. Other apps (Chrome, Slack, Terminal) are checked by hand.
 
 ## Signing
 
@@ -82,7 +82,7 @@ The app is signed with the Apple Development certificate (team QF8GKSXVE2), so m
   It re-registers when Settings changes the shortcut.
 - **`DoubleTapDetector`** (Kit): the timing and reset rules above as plain logic, fed key events, so it can be tested without a keyboard.
 - **`TextTyper`** (Kit protocol): `type(_ text: String)`. The app's version posts `CGEvent` keyboard events with the text, in pieces of up to 20 characters (the most one event carries). Tests use a fake that records what was typed.
-- **`DirectDictation`** (Kit): starts a session on the loaded model and the microphone. It types what the field is missing as updates arrive (`typingEdit`: normally the new end; after a revision, Backspaces first), and on stop types the last word, archives the text (marked typed) and turns the microphone off. Toggle and Hold to talk differ only in which hotkey events start and stop it. It shares the model, the microphone queue and History with the panel's `DictationController`, and keeps to the rules in the table above.
+- **`DirectDictation`** (Kit): starts a session on the loaded model and the microphone. It types what the field is missing as updates arrive (`typingEdit`: normally the new end; after a revision, Backspaces first), and on stop types the last word, archives the text (marked typed) and turns the microphone off. Toggle and Push to talk differ only in which hotkey events start and stop it. It shares the model, the microphone queue and History with the panel's `DictationController`, and keeps to the rules in the table above.
 - **Settings:** a shortcut field, a Mode menu, and an Accessibility row. They're stored in UserDefaults like the model and the history length.
 - **History:** `HistoryEntry` gains `typed`, and the History window shows it as "· typed".
 - **Icon and sound:** the icon turns red once the microphone's first real sound arrives (`DictationController.isMicrophoneLive`), not when it is asked to start. A Bluetooth headset first switches to its call mode, then sends exact zeros for up to about 300 ms while its microphone link comes up. Each capture logs when its first non-zero sample arrived, and the level of its first 1.5 s. That applies to the panel too. A direct dictation also plays a start sound then: two mid-range notes (D5, A5), which come through a headset in call mode and bone-conduction speakers. The microphone restarts itself when its input format changes (a Bluetooth headset switching to call mode stops the audio engine).
@@ -94,9 +94,9 @@ The app is signed with the Apple Development certificate (team QF8GKSXVE2), so m
 - `DoubleTapDetector`:
   - two Left Shift taps within 0.4 s fire;
   - slower taps, Right Shift, Shift with a letter between, or a click between don't fire;
-  - in Hold to talk, Shift then Shift-held (the second press within 0.4 s of the first release) fires start, and releasing it fires stop.
+  - in Push to talk, Shift then Shift-held (the second press within 0.4 s of the first release) fires start, and releasing it fires stop.
 - Toggle: start → listening, mic on, icon red; words arrive → only finished words typed, in order, with the right spacing; stop → last word typed, mic off, a History entry marked typed.
-- Hold to talk: the second press of the double tap starts, its release stops.
+- Push to talk: the second press of the double tap starts, its release stops.
 - Panel open + shortcut → the panel closes by its rules, then direct dictation starts. A paused panel dictation survives a direct dictation.
 - The shortcut while getting ready, or with a permission missing → the panel opens in the matching state, and nothing is typed.
 - Clicking the icon during direct dictation stops it.
@@ -107,9 +107,9 @@ The app is signed with the Apple Development certificate (team QF8GKSXVE2), so m
 
 ## Order of work
 
-1. The held-modifier test (Shift and ⌃⌥), using a throwaway typing prototype. I'll report the result, which decides how Hold to talk types.
+1. The held-modifier test (Shift and ⌃⌥), using a throwaway typing prototype. I'll report the result, which decides how Push to talk types.
 2. `TextTyper`, `DirectDictation` and the hotkey in Toggle mode, with tests and the end-to-end self-test.
-3. Hold to talk.
+3. Push to talk.
 4. Settings rows, the permission panel state, and "typed" in History.
 
 Each step is committed with its tests passing, and the app is rebuilt and restarted after each.
