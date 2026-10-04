@@ -86,16 +86,19 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
 
     func open(startDictation: Bool = true) {
         guard let frame = panelFrame(), frame.width > 0, frame.height > 0 else { log.error("open: no usable frame"); return }
+        let t0 = Date()
         log.notice("open at \(String(describing: frame), privacy: .public)")
         panel.setFrame(frame, display: true)
         // The panel takes keyboard focus without activating the app, like Spotlight: the app's menus never
         // replace the frontmost app's (which on a notched MacBook pushes status icons, ours included, behind
         // the notch), and closing the panel leaves the previous app in front, ready for ⌘V.
         panel.makeKeyAndOrderFront(nil)
+        log.notice("open: shown after \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
         item.button?.highlight(true)
         guard startDictation else { return }
         Task { [weak self] in
             guard let self, self.panel.isVisible else { log.notice("open: panel already gone, not starting"); return }
+            log.notice("open: starting after \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
             await self.controller.panelOpened()
         }
     }

@@ -212,6 +212,29 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertNotEqual(c.phase, .listening)
     }
 
+    /// A slow microphone start runs in the background (the panel stays responsive); closing the panel before
+    /// it finishes still leaves the microphone off.
+    func testSlowMicrophoneStartThenCloseLeavesMicOff() async {
+        final class SlowMic: AudioInput, @unchecked Sendable {
+            let lock = NSLock(); var _running = false
+            var running: Bool { lock.lock(); defer { lock.unlock() }; return _running }
+            func start(_ onSamples: @escaping ([Float]) -> Void) throws { usleep(200_000); lock.lock(); _running = true; lock.unlock() }
+            func stop() { lock.lock(); _running = false; lock.unlock() }
+        }
+        let slow = SlowMic()
+        let c = DictationController(model: .nemotron160, loader: FakeLoader(factory: factory), microphone: slow, permission: FakePermission(),
+                                    clipboard: clip, microphoneQueue: DispatchQueue(label: "test-mic"))
+        c.loadModel()
+        for _ in 0..<50 where c.phase == .preparing { try? await Task.sleep(for: .milliseconds(5)) }
+        let t0 = Date()
+        await c.panelOpened()
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 0.1)   // did not wait for the microphone
+        XCTAssertEqual(c.phase, .listening)
+        c.panelClosed()
+        try? await Task.sleep(for: .milliseconds(400))
+        XCTAssertFalse(slow.running)
+    }
+
     func testMicrophoneDenied() async {
         let c = await makeController(granted: false)
         await c.panelOpened()

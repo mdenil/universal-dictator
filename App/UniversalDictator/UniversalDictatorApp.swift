@@ -23,8 +23,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if DevModes.run(assets: assets) { return }
         let saved = UserDefaults.standard.string(forKey: "model").flatMap(ModelChoice.init(rawValue:)) ?? .nemotron160
         controller = DictationController(model: saved, loader: EngineLoader(assets: assets), microphone: Microphone(),
-                                         permission: SystemMicrophonePermission(), clipboard: SystemClipboard())
+                                         permission: SystemMicrophonePermission(), clipboard: SystemClipboard(),
+                                         microphoneQueue: DispatchQueue(label: "microphone", qos: .userInitiated))
         menuBar = MenuBarPanel(controller: controller)
+        if CommandLine.arguments.contains("--diagnose-start") {
+            // Twice: open the panel and start a real dictation, time it, close. The microphone runs briefly.
+            let tLoad = Date()
+            controller.loadModel()
+            Task { @MainActor in
+                while self.controller.phase == .preparing { try? await Task.sleep(for: .milliseconds(100)) }
+                FileHandle.standardError.write("model ready after \(Int(Date().timeIntervalSince(tLoad) * 1000)) ms\n".data(using: .utf8)!)
+                try? await Task.sleep(for: .seconds(2))
+                for round in 1...2 {
+                    let t0 = Date()
+                    self.menuBar.open()
+                    while self.controller.phase != .listening { try? await Task.sleep(for: .milliseconds(5)) }
+                    FileHandle.standardError.write("round \(round): open -> listening \(Int(Date().timeIntervalSince(t0) * 1000)) ms\n".data(using: .utf8)!)
+                    try? await Task.sleep(for: .milliseconds(500))
+                    self.menuBar.close()
+                    try? await Task.sleep(for: .milliseconds(800))
+                }
+                exit(0)
+            }
+            return
+        }
         if CommandLine.arguments.contains("--diagnose-open") {
             // Shows the panel for a second without starting a dictation, and reports the app's on-screen windows.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {

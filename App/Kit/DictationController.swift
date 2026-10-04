@@ -3,6 +3,9 @@ import AppKit
 import DictatorCore
 import Foundation
 import Observation
+import OSLog
+
+let timing = Logger(subsystem: "dev.universaldictator.UniversalDictator", category: "timing")
 
 // The app's dictation logic, independent of the UI: what happens when the panel opens or closes, and on
 // pause, resume, stop and copy. The SwiftUI views only display `DictationController` and call its methods.
@@ -126,7 +129,14 @@ public final class DictationController {
     var elapsedBefore: TimeInterval = 0
     var tick: Timer?
 
-    public init(model: ModelChoice, loader: ModelLoader, microphone: AudioInput, permission: MicrophonePermission, clipboard: Clipboard) {
+    /// Where the microphone is started and stopped. Starting can take a second or two (waking the audio
+    /// device), so the app passes a serial background queue and the panel draws at once; starts and stops
+    /// stay in order on it, so a stop always follows a start still in progress. nil runs them inline (tests).
+    let microphoneQueue: DispatchQueue?
+
+    public init(model: ModelChoice, loader: ModelLoader, microphone: AudioInput, permission: MicrophonePermission, clipboard: Clipboard,
+                microphoneQueue: DispatchQueue? = nil) {
+        self.microphoneQueue = microphoneQueue
         self.model = model
         self.loader = loader
         self.microphone = microphone
@@ -238,7 +248,9 @@ public final class DictationController {
         // never runs with the panel hidden.
         guard isPanelOpen else { return }
         do {
+            let t0 = Date()
             let s = try factory!.makeSession()
+            let t1 = Date()
             session = s
             committed = ""; partial = ""; editedText = ""; elapsed = 0; elapsedBefore = 0
             updatesTask?.cancel()
@@ -251,6 +263,7 @@ public final class DictationController {
             }
             try startMicrophone(s)
             phase = .listening
+            timing.notice("start: session \(Int(t1.timeIntervalSince(t0) * 1000)) ms")
         } catch {
             phase = .failed("Couldn’t start the microphone: \(error)")
         }
@@ -258,7 +271,9 @@ public final class DictationController {
 
     func startMicrophone(_ s: DictationSessionType) throws {
         var lastLevel = Date.distantPast
-        try microphone.start { [weak self] samples in
+        let mic = microphone
+        let t0 = Date()
+        let onSamples: ([Float]) -> Void = { [weak self] samples in
             s.push(samples)
             let now = Date()
             if now.timeIntervalSince(lastLevel) > 0.05 {
@@ -270,6 +285,22 @@ public final class DictationController {
                 Task { @MainActor in self?.level = level }
             }
         }
+        if let q = microphoneQueue {
+            q.async { [weak self] in
+                do {
+                    try mic.start(onSamples)
+                    timing.notice("microphone started in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+                } catch {
+                    Task { @MainActor in
+                        guard let self, self.session === s else { return }
+                        self.stopMicrophone()
+                        self.phase = .failed("Couldn’t start the microphone: \(error)")
+                    }
+                }
+            }
+        } else {
+            try mic.start(onSamples)
+        }
         listenStart = Date()
         tick?.invalidate()
         tick = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -278,7 +309,8 @@ public final class DictationController {
     }
 
     func stopMicrophone() {
-        microphone.stop()
+        let mic = microphone
+        if let q = microphoneQueue { q.async { mic.stop() } } else { mic.stop() }
         tick?.invalidate(); tick = nil
         if let t = listenStart { elapsedBefore += Date().timeIntervalSince(t) }
         listenStart = nil
