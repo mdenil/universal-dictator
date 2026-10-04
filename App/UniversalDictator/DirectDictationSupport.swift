@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Carbon
+import CoreAudio
 import Observation
 import UniversalDictatorKit
 
@@ -179,5 +180,54 @@ final class HotkeyCenter {
         case .doubleTapUp: onUp()
         case nil: break
         }
+    }
+}
+
+/// The sound that says "listening now": two short notes, rising (D5 then A5), in the middle of the hearing
+/// range so it comes through a Bluetooth headset in call mode (which passes only up to about 3.4–7 kHz) and
+/// bone-conduction speakers, where a high click like "Tink" barely registers.
+enum StartSound {
+    static let sound: NSSound? = NSSound(data: wav())
+
+    static func play() -> Bool { sound?.stop(); return sound?.play() ?? false }
+
+    static func wav() -> Data {
+        let rate = 44100.0
+        var samples: [Int16] = []
+        for (freq, ms) in [(587.33, 90.0), (880.0, 110.0)] {
+            let n = Int(rate * ms / 1000)
+            for i in 0..<n {
+                let t = Double(i) / rate
+                let env = sin(Double.pi * Double(i) / Double(n))           // smooth in and out: no clicks
+                samples.append(Int16(0.45 * env * sin(2 * Double.pi * freq * t) * 32767))
+            }
+        }
+        var d = Data()
+        func u32(_ v: UInt32) { var x = v.littleEndian; d.append(Data(bytes: &x, count: 4)) }
+        func u16(_ v: UInt16) { var x = v.littleEndian; d.append(Data(bytes: &x, count: 2)) }
+        d.append("RIFF".data(using: .ascii)!); u32(UInt32(36 + samples.count * 2)); d.append("WAVEfmt ".data(using: .ascii)!)
+        u32(16); u16(1); u16(1); u32(UInt32(rate)); u32(UInt32(rate) * 2); u16(2); u16(16)
+        d.append("data".data(using: .ascii)!); u32(UInt32(samples.count * 2))
+        for s in samples { u16(UInt16(bitPattern: s)) }
+        return d
+    }
+
+    /// The default output device's name and sample rate, for the log ("8000 Hz" or "16000 Hz" means a
+    /// headset in call mode).
+    static func outputDescription() -> String {
+        var device = AudioObjectID(0)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice, mScope: kAudioObjectPropertyScopeGlobal,
+                                              mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &device) == noErr else { return "?" }
+        var name: Unmanaged<CFString>?
+        size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        addr.mSelector = kAudioObjectPropertyName
+        _ = AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &name)
+        var rate = Float64(0)
+        size = UInt32(MemoryLayout<Float64>.size)
+        addr.mSelector = kAudioDevicePropertyNominalSampleRate
+        _ = AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &rate)
+        return "\(name?.takeRetainedValue() as String? ?? "?") at \(Int(rate)) Hz"
     }
 }

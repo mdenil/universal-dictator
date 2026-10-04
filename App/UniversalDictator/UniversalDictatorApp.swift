@@ -27,7 +27,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let defaults = UserDefaults.standard
         let saved = defaults.string(forKey: "model").flatMap(ModelChoice.init(rawValue:)) ?? .nemotron160
         let limit = defaults.object(forKey: "historyLimit") as? Int ?? 50
-        controller = DictationController(model: saved, loader: EngineLoader(assets: assets), microphone: Microphone(),
+        let microphone = Microphone()
+        microphone.onRestart = { rate in
+            log.notice("microphone input changed format; \(rate.map { "restarted at \(Int($0)) Hz" } ?? "restart failed", privacy: .public)")
+        }
+        controller = DictationController(model: saved, loader: EngineLoader(assets: assets), microphone: microphone,
                                          permission: SystemMicrophonePermission(), clipboard: SystemClipboard(),
                                          microphoneQueue: DispatchQueue(label: "microphone", qos: .userInitiated),
                                          history: FileHistoryStore.standard(bundleID: Bundle.main.bundleIdentifier ?? "dev.universaldictator.UniversalDictator"),
