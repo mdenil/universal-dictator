@@ -7,7 +7,7 @@ The new UI is drafted in Figma under "Direct dictation (draft)": [Universal Dict
 ## What it does
 
 1. **Double-tap Left Shift** (the default shortcut) while typing in any app. The microphone starts; when it is live, a moment later, the menu-bar icon turns red and a short sound plays ("Tink"). Speak then. No window opens.
-2. **Speak.** Each word is typed into the focused text field as if you had typed it, as soon as it is final. That is about 0.3 s after you start the next word. The word still being recognised is never typed, so nothing ever needs to be erased and retyped.
+2. **Speak.** Each word is typed into the focused text field as if you had typed it, as it is recognised (about 0.3 s behind your voice). A word that grows is typed as it grows: "run", then "ning". So when you pause, the last word is already there.
 3. **Stop**, in one of two modes chosen in Settings:
    - **Toggle** (default): double-tap to start, a single tap of Shift to stop. A key-combination shortcut stops with a second press.
    - **Hold to talk**: **Shift, Shift-hold (talk), release.** Tap Shift once, press it again and keep holding while you speak; releasing it stops.
@@ -21,6 +21,7 @@ The text goes wherever keyboard focus is as each word arrives. Clicking into ano
 
 The app sends each word as keyboard events carrying the text (`CGEvent` with a Unicode string). To the receiving app it looks like fast typing, so it works in native apps, browsers, Electron apps such as Slack, and terminals. Undo in the receiving app removes the typed text the way it removes typing.
 
+- **Text that grows:** the model's text normally only grows, so the app types just the new end each time. If it is ever revised instead, which has been seen twice in about ten test runs, the app erases the end that changed with Backspace and types the correction. It logs the text before and after.
 - **Spacing:**
   - Words are typed with the spacing the model gives them.
   - The first word of a dictation gets no leading space, so the text starts exactly at the cursor.
@@ -81,7 +82,7 @@ The app is signed with the Apple Development certificate (team QF8GKSXVE2), so m
   It re-registers when Settings changes the shortcut.
 - **`DoubleTapDetector`** (Kit): the timing and reset rules above as plain logic, fed key events, so it can be tested without a keyboard.
 - **`TextTyper`** (Kit protocol): `type(_ text: String)`. The app's version posts `CGEvent` keyboard events with the text, in pieces of up to 20 characters (the most one event carries). Tests use a fake that records what was typed.
-- **`DirectDictation`** (Kit): starts a session on the loaded model and the microphone. It types each newly finished word as updates arrive, and on stop types the last word, archives the text (marked typed) and turns the microphone off. Toggle and Hold to talk differ only in which hotkey events start and stop it. It shares the model, the microphone queue and History with the panel's `DictationController`, and keeps to the rules in the table above.
+- **`DirectDictation`** (Kit): starts a session on the loaded model and the microphone. It types what the field is missing as updates arrive (`typingEdit`: normally the new end; after a revision, Backspaces first), and on stop types the last word, archives the text (marked typed) and turns the microphone off. Toggle and Hold to talk differ only in which hotkey events start and stop it. It shares the model, the microphone queue and History with the panel's `DictationController`, and keeps to the rules in the table above.
 - **Settings:** a shortcut field, a Mode menu, and an Accessibility row. They're stored in UserDefaults like the model and the history length.
 - **History:** `HistoryEntry` gains `typed`, and the History window shows it as "· typed".
 - **Icon and sound:** the icon turns red once the microphone's first audio arrives (`DictationController.isMicrophoneLive`), not when it is asked to start. A Bluetooth headset switches to its call mode in between. That applies to the panel too. A direct dictation also plays a start sound then: two mid-range notes (D5, A5), which come through a headset in call mode and bone-conduction speakers. The microphone restarts itself when its input format changes (a Bluetooth headset switching to call mode stops the audio engine).

@@ -134,6 +134,8 @@ public struct DoubleTapDetector {
 /// Types text into whatever has keyboard focus (in the app: keyboard events carrying the text).
 public protocol TextTyper {
     func type(_ text: String)
+    /// Presses Backspace `count` times.
+    func deleteBackward(_ count: Int)
 }
 
 /// The Accessibility permission, which typing into other apps and noticing a double tap need.
@@ -152,12 +154,14 @@ public enum DirectStartResult: Equatable {
     case ignored
 }
 
-/// Which part of a dictation's finished text is new: the words after `typed`. Finished text grows a word at a
-/// time; trailing spaces wait until the next word (so the text ends exactly where the dictation does).
-/// Nil if `text` no longer starts with what was typed.
-public func untypedSuffix(of text: String, typed: String) -> String? {
+/// What to type so the field, which holds `typed`, shows `text`: Backspace `delete` times, then type `insert`.
+/// The model's text only grows, so normally nothing is deleted and `insert` is the new end (trailing spaces
+/// wait for the next word, so the text ends exactly where the dictation does). If the text was revised (not
+/// expected), the differing end is erased and retyped.
+public func typingEdit(to text: String, typed: String) -> (delete: Int, insert: String) {
     var t = text
     while let last = t.last, last.isWhitespace { t.removeLast() }
-    guard t.hasPrefix(typed) else { return nil }
-    return String(t.dropFirst(typed.count))
+    if t.hasPrefix(typed) { return (0, String(t.dropFirst(typed.count))) }
+    let common = zip(t, typed).prefix { $0 == $1 }.count
+    return (typed.count - common, String(t.dropFirst(common)))
 }

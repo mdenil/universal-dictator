@@ -527,7 +527,7 @@ public final class DictationController {
             directUpdates = Task { [weak self] in
                 for await u in s.updates {
                     guard let self, self.directSession === s else { break }
-                    self.typeNewWords(u.committed, typer)
+                    self.typeNewWords(u.committed + u.partial, typer)    // the word in progress too: it only grows
                 }
             }
             try startMicrophone(s, timed: false)
@@ -555,14 +555,18 @@ public final class DictationController {
         directTyped = ""
     }
 
+    /// Types whatever the field is missing so it shows `text`: as the dictation goes, each word as it is
+    /// recognised (so the last word is there as soon as you pause), its growth as it grows.
     func typeNewWords(_ text: String, _ typer: TextTyper) {
-        guard let new = untypedSuffix(of: text, typed: directTyped) else {
-            timing.error("direct dictation: text no longer starts with what was typed; not typing more")
-            return
+        let edit = typingEdit(to: text, typed: directTyped)
+        if edit.delete > 0 {
+            timing.notice("direct dictation: text revised; erasing \(edit.delete) characters: typed \"\(String(self.directTyped.suffix(40)), privacy: .public)\", now \"\(String(text.suffix(40)), privacy: .public)\"")
+            typer.deleteBackward(edit.delete)
+            directTyped.removeLast(edit.delete)
         }
-        guard !new.isEmpty else { return }
-        typer.type(new)
-        directTyped += new
+        guard !edit.insert.isEmpty else { return }
+        typer.type(edit.insert)
+        directTyped += edit.insert
     }
 
     /// The direct dictation's microphone couldn't start: the dictation ends (nothing was heard) and

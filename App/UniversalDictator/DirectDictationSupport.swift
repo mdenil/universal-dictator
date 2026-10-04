@@ -21,6 +21,27 @@ final class KeyboardTyper: TextTyper, @unchecked Sendable {
         queue.async { Self.post(text, route: route) }
     }
 
+    func deleteBackward(_ count: Int) {
+        let route = self.route
+        queue.async { Self.postBackspaces(count, route: route) }
+    }
+
+    static func postBackspaces(_ count: Int, route: Route) {
+        let source = CGEventSource(stateID: .privateState)
+        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        for _ in 0..<count {
+            for down in [true, false] {
+                guard let e = CGEvent(keyboardEventSource: source, virtualKey: 51, keyDown: down) else { continue }   // Delete
+                e.flags = []
+                switch route {
+                case .hidTap: e.post(tap: .cghidEventTap)
+                case .sessionTap: e.post(tap: .cgSessionEventTap)
+                case .frontmostApp: if let pid { e.postToPid(pid) }
+                }
+            }
+        }
+    }
+
     static func post(_ text: String, route: Route) {
         let source = CGEventSource(stateID: .privateState)
         let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier

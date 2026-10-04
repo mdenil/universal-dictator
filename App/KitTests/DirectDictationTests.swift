@@ -4,8 +4,10 @@ import XCTest
 
 final class FakeTyper: TextTyper, @unchecked Sendable {
     var typed: [String] = []
-    var all: String { typed.joined() }
-    func type(_ text: String) { typed.append(text) }
+    /// The field's contents.
+    var all = ""
+    func type(_ text: String) { typed.append(text); all += text }
+    func deleteBackward(_ count: Int) { typed.append("⌫\(count)"); all.removeLast(count) }
 }
 
 final class FakeAccessibility: AccessibilityPermission { var isGranted = true }
@@ -109,12 +111,18 @@ final class DoubleTapDetectorTests: XCTestCase {
     }
 }
 
-final class UntypedSuffixTests: XCTestCase {
-    func testWordsAreTypedOnceWithTheirSpaces() {
-        XCTAssertEqual(untypedSuffix(of: "Hi Sarah, ", typed: ""), "Hi Sarah,")
-        XCTAssertEqual(untypedSuffix(of: "Hi Sarah, thanks ", typed: "Hi Sarah,"), " thanks")
-        XCTAssertEqual(untypedSuffix(of: "Hi Sarah, thanks", typed: "Hi Sarah, thanks"), "")
-        XCTAssertNil(untypedSuffix(of: "Hello", typed: "Hi"))
+final class TypingEditTests: XCTestCase {
+    func testTextThatGrowsIsTypedOnceWithItsSpaces() {
+        XCTAssert(typingEdit(to: "Hi Sarah, ", typed: "") == (0, "Hi Sarah,"))
+        XCTAssert(typingEdit(to: "Hi Sarah, thanks ", typed: "Hi Sarah,") == (0, " thanks"))
+        XCTAssert(typingEdit(to: "Hi Sarah, thanks", typed: "Hi Sarah, thanks") == (0, ""))
+        XCTAssert(typingEdit(to: "Hi Sarah, thanks", typed: "Hi Sarah, than") == (0, "ks"))     // a word that grows
+    }
+
+    /// A revision (not expected from the model) is erased back to where it differs and retyped.
+    func testRevisedTextIsErasedAndRetyped() {
+        XCTAssert(typingEdit(to: "Hello there", typed: "Help") == (1, "lo there"))
+        XCTAssert(typingEdit(to: "Yes", typed: "No") == (2, "Yes"))
     }
 }
 
@@ -145,19 +153,19 @@ final class DirectDictationTests: XCTestCase {
         XCTAssertTrue(c.isDirectDictating); XCTAssertTrue(mic.running)
         XCTAssertEqual(c.phase, .idle)                                  // no panel dictation
         let s = factory.sessions[0]
-        s.say("", "Hi")                                                 // still being recognised: nothing typed
-        await settle()
-        XCTAssertEqual(typer.all, "")
-        s.say("Hi ", "Sar")
+        s.say("", "Hi")                                                 // the word in progress is typed at once
         await settle()
         XCTAssertEqual(typer.all, "Hi")
-        s.say("Hi Sarah, thanks ", "for")
+        s.say("Hi ", "Sar")
         await settle()
-        XCTAssertEqual(typer.all, "Hi Sarah, thanks")
+        XCTAssertEqual(typer.all, "Hi Sar")
+        s.say("Hi Sarah, thanks ", "for")                               // a pause here: "for" is already there
+        await settle()
+        XCTAssertEqual(typer.all, "Hi Sarah, thanks for")
         s.final = "Hi Sarah, thanks for the draft."
         await c.stopDirectDictation()
         XCTAssertEqual(typer.all, "Hi Sarah, thanks for the draft. ")                 // a space after the last word
-        XCTAssertEqual(typer.typed, ["Hi", " Sarah, thanks", " for the draft.", " "])
+        XCTAssertEqual(typer.typed, ["Hi", " Sar", "ah, thanks for", " the draft.", " "])
         XCTAssertFalse(c.isDirectDictating); XCTAssertFalse(mic.running)
         XCTAssertEqual(c.history.first?.text, "Hi Sarah, thanks for the draft.")
         XCTAssertEqual(c.history.first?.typed, true)
@@ -228,7 +236,7 @@ final class DirectDictationTests: XCTestCase {
         factory.sessions[0].say("so far ", "x")
         await settle()
         c.finishForQuit()
-        XCTAssertEqual(c.history.first?.text, "so far"); XCTAssertEqual(c.history.first?.typed, true)
+        XCTAssertEqual(c.history.first?.text, "so far x"); XCTAssertEqual(c.history.first?.typed, true)
         XCTAssertFalse(mic.running)
     }
 
@@ -288,5 +296,19 @@ final class DirectDictationTests: XCTestCase {
         flaky.fail = false
         await c.panelOpened()
         XCTAssertEqual(c.phase, .listening)
+    }
+
+    /// If the text is ever revised (not just extended), the field is corrected with Backspace instead of
+    /// typing stopping.
+    func testRevisionIsCorrected() async {
+        let c = await ready()
+        _ = await c.startDirectDictation()
+        let s = factory.sessions[0]
+        s.say("Help", "")
+        await settle()
+        s.say("Hello there", "")
+        await settle()
+        XCTAssertEqual(typer.all, "Hello there")
+        XCTAssertEqual(typer.typed, ["Help", "⌫1", "lo there"])
     }
 }
