@@ -311,9 +311,16 @@ enum DevModes {
         let h = DictationController(model: .nemotron160, loader: StandInLoader(factory: StandInFactory()), microphone: SilentInput(),
                                     permission: Permission(granted: true), clipboard: NoClipboard(), history: saved)
         h.loadModel(); await settle()
-        render(SettingsView(controller: h, direct: DirectSettings()), "7-settings", dir, background: false)
+        let scratch = UserDefaults(suiteName: "dev.universaldictator.snapshot")!
+        scratch.removePersistentDomain(forName: "dev.universaldictator.snapshot")
+        render(SettingsView(controller: h, direct: DirectSettings(defaults: scratch)), "7-settings", dir, background: false)
         await h.panelOpened(); h.pause(); await settle()
-        render(SettingsView(controller: h, direct: DirectSettings()), "8-settings-paused", dir, background: false)
+render(SettingsView(controller: h, direct: DirectSettings(defaults: scratch)), "8-settings-paused", dir, background: false)
+        let combo = DirectSettings(defaults: scratch)
+        combo.shortcut = .combination(keyCode: 0, carbonModifiers: 0x0200, display: "⇧A")
+        combo.mode = .pushToTalk
+        render(SettingsView(controller: h, direct: combo), "8b-settings-combination", dir, background: false)
+        scratch.removePersistentDomain(forName: "dev.universaldictator.snapshot")
         render(HistoryView(controller: h).frame(width: 520, height: 400), "9-history", dir, background: false)
         let second = h.history[1]
         render(HistoryView(controller: h, editingID: second.id, draft: second.text).frame(width: 520, height: 400), "9b-history-editing", dir,

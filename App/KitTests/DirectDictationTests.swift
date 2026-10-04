@@ -104,6 +104,23 @@ final class DoubleTapDetectorTests: XCTestCase {
                             .modifierDown(.leftShift, at: 0.4), .modifierUp(.leftShift, at: 0.5)]), [.doubleTapDown, .doubleTapUp])
     }
 
+    func combo(_ mods: UInt32, _ display: String) -> DictationShortcut { .combination(keyCode: 0, carbonModifiers: mods, display: display) }
+
+    /// Combinations that take over typing or a standard command everywhere get a warning; the rest don't.
+    func testCombinationWarnings() {
+        XCTAssertEqual(combo(0x0200, "⇧A").warning, "⇧A replaces typing a capital A everywhere")
+        XCTAssertEqual(combo(0x0100, "⌘A").warning, "⌘A replaces Select All everywhere")
+        XCTAssertEqual(combo(0x0100, "⌘C").warning, "⌘C replaces Copy everywhere")
+        XCTAssertEqual(combo(0x0100, "⌘Space").warning, "⌘Space replaces Spotlight everywhere")
+        XCTAssertEqual(combo(0x0800, "⌥E").warning, "⌥E replaces typing a special character everywhere")
+        XCTAssertNil(combo(0x1000, "⌃A").warning)
+        XCTAssertNil(combo(0x1000 | 0x0800, "⌃⌥D").warning)
+        XCTAssertNil(combo(0x0100 | 0x0200, "⇧⌘D").warning)
+        XCTAssertNil(combo(0, "F5").warning)
+        XCTAssertNil(DictationShortcut.doubleTap(.leftCommand).warning)
+        XCTAssertEqual(ModifierKey.leftCommand.display, "Left ⌘")
+    }
+
     func testShortcutDisplay() {
         XCTAssertEqual(DictationShortcut.default.display, "Double Left ⇧")
         let saved = try! JSONEncoder().encode(DictationShortcut.combination(keyCode: 2, carbonModifiers: 6144, display: "⌃⌥D"))

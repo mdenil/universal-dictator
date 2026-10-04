@@ -36,6 +36,9 @@ public enum ModifierKey: String, CaseIterable, Codable, Sendable {
     }
 
     public var side: String { rawValue.hasPrefix("left") ? "Left" : "Right" }
+
+    /// "Left ⇧".
+    public var display: String { "\(side) \(symbol)" }
 }
 
 /// The direct-dictation shortcut: a double tap of one modifier key, or a key combination.
@@ -45,6 +48,27 @@ public enum DictationShortcut: Codable, Equatable, Sendable {
     case combination(keyCode: UInt32, carbonModifiers: UInt32, display: String)
 
     public static let `default` = DictationShortcut.doubleTap(.leftShift)
+
+    public var isDoubleTap: Bool { if case .doubleTap = self { return true }; return false }
+
+    /// For a key combination that would take over ordinary typing or a standard command in every app (macOS
+    /// gives a registered shortcut to this app instead): a one-line warning. Nil otherwise.
+    public var warning: String? {
+        guard case .combination(_, let mods, let display) = self else { return nil }
+        let cmd = UInt32(0x0100), shift = UInt32(0x0200), option = UInt32(0x0800), control = UInt32(0x1000)   // Carbon flags
+        let key = String(display.drop(while: { "⌃⌥⇧⌘".contains($0) }))
+        let isCharacter = key.count == 1 || key == "Space"
+        if mods & (cmd | control) == 0, isCharacter {
+            if mods & option != 0 { return "\(display) replaces typing a special character everywhere" }
+            return key == "Space" ? "\(display) replaces typing a space everywhere" : "\(display) replaces typing a capital \(key) everywhere"
+        }
+        let commands: [String: String] = ["A": "Select All", "C": "Copy", "V": "Paste", "X": "Cut", "Z": "Undo", "S": "Save", "Q": "Quit",
+                                          "W": "Close", "T": "New Tab", "N": "New", "F": "Find", "P": "Print", "O": "Open",
+                                          "Space": "Spotlight", "⇥": "app switching"]
+        if mods == cmd, let name = commands[key] { return "\(display) replaces \(name) everywhere" }
+        if mods == cmd | shift, key == "Z" { return "\(display) replaces Redo everywhere" }
+        return nil
+    }
 
     /// "Double Left ⇧", or the combination as macOS writes it ("⌃⌥D").
     public var display: String {

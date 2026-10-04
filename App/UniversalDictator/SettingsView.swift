@@ -8,6 +8,30 @@ struct SettingsView: View {
     @Bindable var controller: DictationController
     @Bindable var direct: DirectSettings
     @State var confirmingClear = false
+    /// Key combination chosen but none recorded yet: the field records straight away.
+    @State var choosingCombination = false
+    @State var recordCombination = false
+
+    enum ShortcutKind { case doubleTap, combination }
+
+    var kind: ShortcutKind { direct.shortcut.isDoubleTap && !choosingCombination ? .doubleTap : .combination }
+
+    var kindBinding: Binding<ShortcutKind> {
+        Binding(get: { kind }, set: { new in
+            switch new {
+            case .doubleTap:
+                choosingCombination = false
+                if !direct.shortcut.isDoubleTap { direct.shortcut = .doubleTap(direct.lastDoubleTapKey) }
+            case .combination:
+                if let c = direct.lastCombination { direct.shortcut = c } else { choosingCombination = true; recordCombination = true }
+            }
+        })
+    }
+
+    var doubleTapKey: Binding<ModifierKey> {
+        Binding(get: { if case .doubleTap(let k) = direct.shortcut { return k }; return direct.lastDoubleTapKey },
+                set: { direct.shortcut = .doubleTap($0) })
+    }
 
     var body: some View {
         VStack(spacing: 12) {
@@ -36,7 +60,28 @@ struct SettingsView: View {
                 .fixedSize()
             }
             Divider()
-            row("Shortcut") { ShortcutField(settings: direct) }
+            row("Shortcut") {
+                Picker("Shortcut", selection: kindBinding) {
+                    Text("Double tap").tag(ShortcutKind.doubleTap)
+                    Text("Key combination").tag(ShortcutKind.combination)
+                }
+                .labelsHidden()
+                .fixedSize()
+            }
+            if kind == .doubleTap {
+                row("Key") {
+                    Picker("Key", selection: doubleTapKey) {
+                        ForEach(ModifierKey.allCases, id: \.self) { Text($0.display).tag($0) }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            } else {
+                row("Keys") { CombinationField(settings: direct, recordNow: $recordCombination) }
+                if let w = direct.shortcut.warning, !direct.isRecording {
+                    Text(w).font(.system(size: 11)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
             row("Mode") {
                 Picker("Mode", selection: $direct.mode) {
                     ForEach(DirectMode.allCases) { Text($0.displayName).tag($0) }
@@ -53,6 +98,8 @@ struct SettingsView: View {
                 }
             }
         }
+        // Recording ended: the menu follows the shortcut in force (a cancelled first recording leaves the double tap).
+        .onChange(of: direct.isRecording) { if !direct.isRecording { choosingCombination = false } }
         .padding(.horizontal, 24)
         .padding(.vertical, 22)
         .frame(width: 360)
@@ -83,29 +130,35 @@ struct SettingsView: View {
     }
 }
 
-/// The shortcut field: shows the shortcut; click it, then double-tap a modifier key or press a key combination
-/// (with ⌘, ⌃ or ⌥, or a function key). Esc cancels.
-struct ShortcutField: View {
+/// The key-combination field: shows the combination; click it (or it starts by itself when Key combination is
+/// first chosen), then press the keys: any key with ⌘, ⌃, ⌥ or ⇧, or a function key on its own. Esc cancels.
+struct CombinationField: View {
     @Bindable var settings: DirectSettings
+    @Binding var recordNow: Bool
     @State var monitor: Any?
-    @State var detectors: [ModifierKey: DoubleTapDetector] = [:]
+
+    var label: String {
+        if settings.isRecording { return "Press keys…" }
+        if case .combination = settings.shortcut { return settings.shortcut.display }
+        return "Click to set"
+    }
 
     var body: some View {
         Button(action: { settings.isRecording ? stop() : start() }) {
-            Text(settings.isRecording ? "Press keys…" : settings.shortcut.display)
+            Text(label)
                 .foregroundStyle(settings.isRecording ? .secondary : .primary)
-                .frame(minWidth: 100)
+                .frame(minWidth: 90)
         }
         .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.accentColor, lineWidth: settings.isRecording ? 2 : 0))
+        .onAppear { if recordNow { recordNow = false; start() } }
+        .onChange(of: recordNow) { if recordNow { recordNow = false; start() } }
         .onDisappear { stop() }
     }
 
     func start() {
+        guard monitor == nil else { return }
         settings.isRecording = true
-        detectors = [:]
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { e in
-            handle(e) ? nil : e
-        }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { e in handle(e) ? nil : e }
     }
 
     func stop() {
@@ -116,22 +169,10 @@ struct ShortcutField: View {
 
     /// True if the event was used.
     func handle(_ e: NSEvent) -> Bool {
-        if e.type == .flagsChanged {
-            guard let key = ModifierKey(keyCode: e.keyCode) else { return false }
-            var d = detectors[key] ?? DoubleTapDetector(key: key)
-            let event = HotkeyCenter.detectorEvent(e)
-            for other in detectors.keys where other != key { _ = detectors[other]?.handle(event) }
-            if d.handle(event) == .doubleTapDown {
-                settings.shortcut = .doubleTap(key)
-                stop()
-            }
-            detectors[key] = d
-            return true
-        }
         let flags = e.modifierFlags.intersection([.command, .control, .option, .shift])
         if e.keyCode == 53, flags.isEmpty { stop(); return true }                   // Esc
         let fKeys: Set<UInt16> = [122, 120, 99, 118, 96, 97, 98, 100, 101, 109, 103, 111, 105, 107, 113, 106, 64, 79, 80]
-        guard !flags.intersection([.command, .control, .option]).isEmpty || fKeys.contains(e.keyCode) else { NSSound.beep(); return true }
+        guard !flags.isEmpty || fKeys.contains(e.keyCode) else { NSSound.beep(); return true }
         var carbon: UInt32 = 0
         if flags.contains(.command) { carbon |= UInt32(cmdKey) }
         if flags.contains(.option) { carbon |= UInt32(optionKey) }
@@ -142,7 +183,8 @@ struct ShortcutField: View {
         if flags.contains(.option) { symbols += "⌥" }
         if flags.contains(.shift) { symbols += "⇧" }
         if flags.contains(.command) { symbols += "⌘" }
-        settings.shortcut = .combination(keyCode: UInt32(e.keyCode), carbonModifiers: carbon, display: symbols + Self.keyName(e))
+        let shortcut = DictationShortcut.combination(keyCode: UInt32(e.keyCode), carbonModifiers: carbon, display: symbols + Self.keyName(e))
+        settings.shortcut = shortcut
         stop()
         return true
     }

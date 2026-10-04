@@ -79,20 +79,37 @@ struct SystemAccessibility: AccessibilityPermission {
 @MainActor @Observable
 final class DirectSettings {
     var shortcut: DictationShortcut {
-        didSet { if let d = try? JSONEncoder().encode(shortcut) { UserDefaults.standard.set(d, forKey: "directShortcut") } }
+        didSet {
+            if let d = try? JSONEncoder().encode(shortcut) { defaults.set(d, forKey: "directShortcut") }
+            switch shortcut {
+            case .doubleTap(let k): lastDoubleTapKey = k
+            case .combination: lastCombination = shortcut
+            }
+        }
     }
+    /// The last of each kind, so switching kinds in Settings brings it back.
+    var lastDoubleTapKey: ModifierKey = .leftShift
+    var lastCombination: DictationShortcut?
     var mode: DirectMode {
-        didSet { UserDefaults.standard.set(mode.rawValue, forKey: "directMode") }
+        didSet { defaults.set(mode.rawValue, forKey: "directMode") }
     }
     private(set) var accessibilityGranted = AXIsProcessTrusted()
     /// While the Settings shortcut field records a new shortcut, the current one does nothing.
     var isRecording = false
     @ObservationIgnored var poll: Timer?
 
-    init() {
-        let d = UserDefaults.standard
+    @ObservationIgnored let defaults: UserDefaults
+
+    /// `defaults`: where the settings are saved (the snapshot mode passes its own, so it never changes yours).
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        let d = defaults
         shortcut = d.data(forKey: "directShortcut").flatMap { try? JSONDecoder().decode(DictationShortcut.self, from: $0) } ?? .default
         mode = d.string(forKey: "directMode").flatMap(DirectMode.init(rawValue:)) ?? .toggle
+        switch shortcut {
+        case .doubleTap(let k): lastDoubleTapKey = k
+        case .combination: lastCombination = shortcut
+        }
         poll = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refreshAccessibility() }
         }
