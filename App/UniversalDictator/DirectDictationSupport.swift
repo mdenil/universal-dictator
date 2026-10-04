@@ -11,7 +11,15 @@ import UniversalDictatorKit
 /// Types text into whatever has keyboard focus by posting keyboard events that carry the characters, one
 /// character per key press, on a serial queue (in order, without holding up the caller).
 final class KeyboardTyper: TextTyper, @unchecked Sendable {
-    enum Route: String, CaseIterable { case hidTap, sessionTap, frontmostApp }
+    enum Route: Equatable {
+        case hidTap, sessionTap
+        /// To one app's process (the front one if nil), whether or not it is in front.
+        case frontmostApp(pid: pid_t? = nil)
+        static let allCases: [Route] = [.hidTap, .sessionTap, .frontmostApp()]
+        var rawValue: String {
+            switch self { case .hidTap: return "hidTap"; case .sessionTap: return "sessionTap"; case .frontmostApp: return "frontmostApp" }
+        }
+    }
 
     let queue = DispatchQueue(label: "typing", qos: .userInitiated)
     var route: Route = .hidTap
@@ -28,7 +36,8 @@ final class KeyboardTyper: TextTyper, @unchecked Sendable {
 
     static func postBackspaces(_ count: Int, route: Route) {
         let source = CGEventSource(stateID: .privateState)
-        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        var pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if case .frontmostApp(let p?) = route { pid = p }
         for _ in 0..<count {
             for down in [true, false] {
                 guard let e = CGEvent(keyboardEventSource: source, virtualKey: 51, keyDown: down) else { continue }   // Delete
@@ -44,7 +53,8 @@ final class KeyboardTyper: TextTyper, @unchecked Sendable {
 
     static func post(_ text: String, route: Route) {
         let source = CGEventSource(stateID: .privateState)
-        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        var pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if case .frontmostApp(let p?) = route { pid = p }
         for ch in text {
             let units = Array(String(ch).utf16)
             for down in [true, false] {

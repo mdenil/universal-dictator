@@ -21,6 +21,12 @@ import UniversalDictatorKit
 //   UniversalDictator --direct-selftest <audio> [--model nemotron160|nemotron560]
 //       direct dictation of <audio> into a test window of its own, through the real model and real typing;
 //       prints PASS if the window holds exactly the dictation's final text and a space. Needs Accessibility.
+//   UniversalDictator --target-probe [rounds]
+//       for the "keep typing into the same place" investigation, guided by sounds, `rounds` times (default 6):
+//       click into a text field in any app; at the first chime (5 s) it remembers that app and field; switch to
+//       another app; at the second chime (5 s later) it tries, with the remembered app in the background,
+//       (A) keystrokes posted to that app's process and (B) inserting through Accessibility into the remembered
+//       field, typing the markers ⟨A⟩ and ⟨B⟩. It prints what it could read back from the field. Needs Accessibility.
 //   UniversalDictator --snapshot <dir>
 //       renders the panel in each state to <dir>/<state>.png with stand-in sessions and exits.
 enum DevModes {
@@ -48,6 +54,11 @@ enum DevModes {
         if let audio = argument(after: "--direct-selftest") {
             let choice = argument(after: "--model").flatMap(ModelChoice.init(rawValue:)) ?? .nemotron160
             Task { await directSelftest(audio: URL(fileURLWithPath: audio), choice: choice, assets: assets); exit(0) }
+            return true
+        }
+        if CommandLine.arguments.contains("--target-probe") {
+            let rounds = argument(after: "--target-probe").flatMap(Int.init) ?? 6
+            Task { await targetProbe(rounds: rounds); exit(0) }
             return true
         }
         if CommandLine.arguments.contains("--measure-switch") {
@@ -211,6 +222,52 @@ enum DevModes {
         } catch {
             log("direct selftest failed: \(error)")
         }
+    }
+
+    // MARK: Typing into a fixed place
+
+    static func axValue(_ e: AXUIElement, _ attr: String) -> CFTypeRef? {
+        var v: CFTypeRef?
+        return AXUIElementCopyAttributeValue(e, attr as CFString, &v) == .success ? v : nil
+    }
+
+    @MainActor static func targetProbe(rounds: Int) async {
+        func log(_ s: String) { FileHandle.standardError.write((s + "\n").data(using: .utf8)!) }
+        guard AXIsProcessTrusted() else { log("Accessibility is not allowed for this app"); return }
+        let me = ProcessInfo.processInfo.processIdentifier
+        for round in 1...rounds {
+            log("round \(round): click into a text field in an app; first chime in 5 s")
+            try? await Task.sleep(for: .seconds(5))
+            guard let target = NSWorkspace.shared.frontmostApplication, target.processIdentifier != me else { log("  no app in front; skipped"); continue }
+            let app = AXUIElementCreateApplication(target.processIdentifier)
+            let field = axValue(app, kAXFocusedUIElementAttribute as String).map { $0 as! AXUIElement }
+            let role = field.flatMap { axValue($0, kAXRoleAttribute as String) as? String } ?? "none"
+            let settable: Bool = {
+                guard let f = field else { return false }
+                var ok = DarwinBoolean(false)
+                return AXUIElementIsAttributeSettable(f, kAXSelectedTextAttribute as CFString, &ok) == .success && ok.boolValue
+            }()
+            _ = StartSound.play()
+            log("  remembered \(target.localizedName ?? "?") (pid \(target.processIdentifier)); focused element role \(role); selected text settable: \(settable)")
+            log("  now switch to a different app; second chime in 5 s")
+            try? await Task.sleep(for: .seconds(5))
+            let front = NSWorkspace.shared.frontmostApplication
+            if front?.processIdentifier == target.processIdentifier { log("  \(target.localizedName ?? "?") is still in front; this round doesn't test the background") }
+            // A: keystrokes posted to the remembered app's process.
+            KeyboardTyper.post("⟨A⟩", route: .frontmostApp(pid: target.processIdentifier))
+            try? await Task.sleep(for: .milliseconds(400))
+            // B: insert at the remembered field's cursor through Accessibility.
+            var bResult = "no field"
+            if let f = field { bResult = "\(AXUIElementSetAttributeValue(f, kAXSelectedTextAttribute as CFString, "⟨B⟩" as CFString).rawValue)" }
+            try? await Task.sleep(for: .milliseconds(400))
+            _ = StartSound.play()
+            let value = field.flatMap { axValue($0, kAXValueAttribute as String) as? String }
+            let tail = value.map { String($0.suffix(60)).replacingOccurrences(of: "\n", with: "⏎") }
+            log("  front while typing: \(front?.localizedName ?? "?"); B set-result \(bResult) (0 = success)")
+            log("  field now ends: \(tail.map { "\"\($0)\"" } ?? "(can't read the field)")")
+            log("  A arrived: \(value.map { $0.contains("⟨A⟩") ? "yes" : "no" } ?? "unknown")   B arrived: \(value.map { $0.contains("⟨B⟩") ? "yes" : "no" } ?? "unknown")")
+        }
+        log("done")
     }
 
     // MARK: Model switching
