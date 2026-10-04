@@ -153,18 +153,7 @@ The right-click menu, top to bottom:
 - "Settings… ⌘,";
 - "Quit".
 
-**Switching models stays fast.** Two caches already keep a model ready once it has been prepared:
-- **Disk:** macOS keeps each model's Neural Engine compile on disk, so a model prepared once isn't prepared again on later launches.
-- **Memory:** once loaded, a model stays in memory for the rest of the run, so switching back to it is immediate.
-
-Only the first switch to a model never used on this Mac shows "Getting ready".
-
-I'll measure three things and report them:
-- the time to switch to a model, back and forth, in one run;
-- the time to switch after a relaunch;
-- the extra memory used by keeping both models loaded.
-
-If the memory cost turns out to be large, I'll come back to you before choosing between memory and switch time.
+**Only the chosen model is in memory.** Switching releases the other model. macOS keeps each model's Neural Engine compile on disk, so only the first switch to a model never used on this Mac shows "Getting ready" for about half a minute. After that, a switch takes 0.4–1.0 s, measured with `--measure-switch`. The app uses 95–106 MB with one model loaded, against 145–172 MB with both.
 
 **Build:**
 - the SwiftUI `Settings` scene, which is already in the app but empty;
@@ -175,7 +164,7 @@ If the memory cost turns out to be large, I'll come back to you before choosing 
 **Tests:**
 - changing the history limit trims the history; the history tests above cover this;
 - changing the model while paused is refused;
-- switching away and back doesn't reload the first model;
+- switching loads only the chosen model;
 - snapshots of the Settings window.
 
 ## Order of work
