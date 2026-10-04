@@ -89,17 +89,39 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(c.partial, "for")
     }
 
-    func testPauseResumeAndClosingThePanel() async {
+    func testPauseAndResumeInsideThePanel() async {
         let c = await makeController()
         await c.panelOpened()
         c.pause()
         XCTAssertEqual(c.phase, .paused); XCTAssertFalse(mic.running); XCTAssertEqual(factory.sessions[0].pauses, 1)
         c.resume()
         XCTAssertEqual(c.phase, .listening); XCTAssertTrue(mic.running); XCTAssertEqual(factory.sessions[0].resumes, 1)
-        c.panelClosed()                                    // closing the panel pauses
-        XCTAssertEqual(c.phase, .paused); XCTAssertFalse(mic.running)
-        await c.panelOpened()                              // reopening resumes the same dictation
-        XCTAssertEqual(c.phase, .listening); XCTAssertEqual(factory.sessions.count, 1)
+    }
+
+    /// Closing the panel ends the dictation (mic off at once, text to history); the next click starts a new one.
+    func testClosingEndsTheDictationAndReopeningStartsANewOne() async {
+        let c = await makeController()
+        await c.panelOpened()
+        factory.sessions[0].say("first ", "one")
+        await settle()
+        c.panelClosed()
+        XCTAssertFalse(mic.running)
+        XCTAssertEqual(c.phase, .idle)
+        await settle()
+        XCTAssertEqual(c.history.map(\.text), ["hello world"])      // the session's final text
+        XCTAssertEqual(c.history.first?.copied, false)
+        await c.panelOpened()
+        XCTAssertEqual(c.phase, .listening); XCTAssertEqual(factory.sessions.count, 2)
+        XCTAssertEqual(c.text, "")
+    }
+
+    func testClosingWhilePausedAlsoEnds() async {
+        let c = await makeController()
+        await c.panelOpened()
+        c.pause()
+        c.panelClosed()
+        await settle()
+        XCTAssertEqual(c.phase, .idle); XCTAssertEqual(c.history.count, 1)
     }
 
     func testCopySoFarKeepsListening() async {
@@ -139,14 +161,29 @@ final class DictationControllerTests: XCTestCase {
         XCTAssertEqual(c.phase, .listening); XCTAssertEqual(factory.sessions.count, 2)
     }
 
-    func testDoneTextSurvivesReopening() async {
+    /// Stopped (not copied) text goes to the history when the panel closes, with any edits.
+    func testStoppedTextGoesToHistoryOnClose() async {
         let c = await makeController()
         await c.panelOpened()
         await c.stop()
+        c.editedText = "Edited."
         c.panelClosed()
+        XCTAssertEqual(c.phase, .idle)
+        XCTAssertEqual(c.history.map(\.text), ["Edited."])
         await c.panelOpened()
-        XCTAssertEqual(c.phase, .done)
-        XCTAssertEqual(c.editedText, "hello world")
+        XCTAssertEqual(c.phase, .listening)
+    }
+
+    func testCopiesGoToHistoryNewestFirst() async {
+        let c = await makeController()
+        await c.panelOpened(); await c.stopAndCopy()
+        await c.panelOpened(); await c.stop(); c.editedText = "Second."; c.copyAndFinish()
+        XCTAssertEqual(c.history.map(\.text), ["Second.", "hello world"])
+        XCTAssertTrue(c.history.allSatisfy(\.copied))
+        c.copyFromHistory(c.history[1])
+        XCTAssertEqual(clip.text, "hello world")
+        c.clearHistory()
+        XCTAssertTrue(c.history.isEmpty)
     }
 
     /// The panel closes while the permission prompt is up: granting must not start the microphone.

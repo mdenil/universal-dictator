@@ -60,7 +60,8 @@ Using it:
 
 - **Click the icon:** the panel opens and listening starts. Words appear about 0.3 s after you say them; the grey word is still being recognised.
 - **⌘C** stops, copies the whole text and closes the panel: click, talk, ⌘C, then ⌘V wherever you want it.
-- **Space** pauses and resumes. **Copy so far** copies the text without stopping. Clicking away also pauses.
+- **Space** pauses and resumes. **Copy so far** copies the text without stopping.
+- **Closing the panel** (clicking away, or the icon) ends the dictation; the next click always starts a new one. Finished dictations are kept in a history (this session only, for now).
 - **Return** (or Stop) ends the dictation; the text becomes editable.
 - **Copy** (⌘Return) copies the edited text and closes the panel; focus returns to the app you were in, ready for ⌘V. **New** starts again.
 - **The model menu** (top right) switches between Nemotron 160 ms and 560 ms.

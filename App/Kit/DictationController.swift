@@ -68,6 +68,16 @@ public struct SystemClipboard: Clipboard {
     }
 }
 
+/// A finished dictation, kept for the history menu.
+public struct HistoryEntry: Identifiable, Equatable, Sendable {
+    public let id = UUID()
+    public let text: String
+    public let date: Date
+    public let model: ModelChoice
+    /// Whether the text was copied (Copy or ⌘C) rather than left when the panel closed.
+    public let copied: Bool
+}
+
 @MainActor @Observable
 public final class DictationController {
     public enum Phase: Equatable {
@@ -98,6 +108,9 @@ public final class DictationController {
     public private(set) var copiedSoFar = false
     /// Whether the panel is showing. The microphone only runs while it is.
     public private(set) var isPanelOpen = false
+    /// Finished dictations, newest first (this session only).
+    public private(set) var history: [HistoryEntry] = []
+    public var historyLimit = 50
 
     let loader: ModelLoader
     let microphone: AudioInput
@@ -159,24 +172,53 @@ public final class DictationController {
 
     // MARK: Panel
 
-    /// The panel opened: start listening, or resume a dictation paused by closing the panel.
+    /// The panel opened: every opening starts a new dictation (the previous one ended when the panel closed).
     public func panelOpened() async {
         isPanelOpen = true
         switch phase {
         case .idle: await start()
-        case .paused: resume()
         case .preparing: startWhenReady = true
         case .microphoneDenied: if permission.isGranted { phase = .idle; await start() }
         default: break
         }
     }
 
-    /// The panel closed: listening pauses, so the microphone is never on while the panel is hidden.
+    /// The panel closed: the dictation ends. The microphone stops at once, the text goes to the history, and
+    /// the next opening starts afresh.
     public func panelClosed() {
         isPanelOpen = false
         startWhenReady = false
-        if phase == .listening { pause() }
+        switch phase {
+        case .listening, .paused:
+            if phase == .listening { stopMicrophone() }
+            let s = session, shown = text, choice = model
+            session = nil
+            updatesTask?.cancel()
+            reset()
+            Task {
+                let final = await s?.stop() ?? shown
+                self.archive(final, model: choice, copied: false)
+            }
+        case .done:
+            archive(editedText, model: model, copied: false)
+            reset()
+        default:
+            break
+        }
     }
+
+    /// Adds a finished dictation to the history (empty text is not kept).
+    func archive(_ text: String, model: ModelChoice, copied: Bool) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        history.insert(HistoryEntry(text: t, date: Date(), model: model, copied: copied), at: 0)
+        if history.count > historyLimit { history.removeLast(history.count - historyLimit) }
+    }
+
+    /// Copies a history entry.
+    public func copyFromHistory(_ entry: HistoryEntry) { clipboard.copy(entry.text) }
+
+    public func clearHistory() { history.removeAll() }
 
     /// Asks for microphone access up front (at launch), so the prompt never appears in the middle of a click.
     public func requestMicrophoneAccessIfNeeded() async {
@@ -284,6 +326,7 @@ public final class DictationController {
         guard phase == .listening || phase == .paused else { return }
         await stop()
         clipboard.copy(editedText)
+        archive(editedText, model: model, copied: true)
         reset()
     }
 
@@ -291,6 +334,7 @@ public final class DictationController {
     public func copyAndFinish() {
         guard phase == .done else { return }
         clipboard.copy(editedText)
+        archive(editedText, model: model, copied: true)
         reset()
     }
 
