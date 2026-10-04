@@ -1,6 +1,9 @@
 import AppKit
+import OSLog
 import SwiftUI
 import UniversalDictatorKit
+
+let log = Logger(subsystem: "dev.universaldictator.UniversalDictator", category: "panel")
 
 /// The menu-bar item and the panel that drops down under it. Clicking the item toggles the panel; the
 /// panel also closes when it loses focus, and after Copy.
@@ -21,7 +24,13 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         panel.delegate = self
         item.button?.target = self
         item.button?.action = #selector(clicked)
-        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        // Right clicks on the icon open the app menu. Caught by a monitor so the button keeps its default
+        // left-click behaviour (making it act on mouse-up instead broke opening the panel).
+        rightClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown]) { [weak self] event in
+            guard let self, let w = self.item.button?.window, event.window === w else { return event }
+            self.showAppMenu()
+            return nil
+        }
         item.button?.toolTip = "Universal Dictator"
         updateIcon()
     }
@@ -30,10 +39,13 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
     /// from the panel (closing it), and that same click must not reopen it.
     var lastClose = Date.distantPast
 
-    /// Left click toggles the panel; right click (or Control-click) shows the app menu with Quit.
+    var rightClickMonitor: Any?
+
+    /// Left click toggles the panel; Control-click shows the app menu with Quit (right click: see the monitor).
     @objc func clicked() {
         let e = NSApp.currentEvent
-        if e?.type == .rightMouseUp || e?.modifierFlags.contains(.control) == true { showAppMenu() } else { toggle() }
+        log.notice("icon clicked (event \(e.map { String(describing: $0.type) } ?? "none", privacy: .public))")
+        if e?.modifierFlags.contains(.control) == true { showAppMenu() } else { toggle() }
     }
 
     func showAppMenu() {
@@ -73,7 +85,8 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
     }
 
     func open(startDictation: Bool = true) {
-        guard let frame = panelFrame(), frame.width > 0, frame.height > 0 else { return }
+        guard let frame = panelFrame(), frame.width > 0, frame.height > 0 else { log.error("open: no usable frame"); return }
+        log.notice("open at \(String(describing: frame), privacy: .public)")
         panel.setFrame(frame, display: true)
         // The panel takes keyboard focus without activating the app, like Spotlight: the app's menus never
         // replace the frontmost app's (which on a notched MacBook pushes status icons, ours included, behind
@@ -82,20 +95,24 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         item.button?.highlight(true)
         guard startDictation else { return }
         Task { [weak self] in
-            guard let self, self.panel.isVisible else { return }
+            guard let self, self.panel.isVisible else { log.notice("open: panel already gone, not starting"); return }
             await self.controller.panelOpened()
         }
     }
 
     func close() {
         guard panel.isVisible else { return }
+        log.notice("close (phase \(String(describing: self.controller.phase), privacy: .public))")
         panel.orderOut(nil)
         lastClose = Date()
         item.button?.highlight(false)
         controller.panelClosed()
     }
 
-    func windowDidResignKey(_ notification: Notification) { close() }
+    func windowDidResignKey(_ notification: Notification) {
+        log.notice("panel lost focus")
+        close()
+    }
 
     /// Keeps the menu-bar icon in step with the dictation (listening, paused, preparing).
     func updateIcon() {
@@ -104,6 +121,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
             if controller.phase == .listening && !panel.isVisible {
                 Task { @MainActor [weak self] in self?.controller.panelClosed() }
             }
+            log.notice("phase \(String(describing: self.controller.phase), privacy: .public)")
             let name: String
             switch controller.phase {
             case .listening: name = "waveform.badge.mic"
