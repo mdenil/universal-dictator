@@ -34,6 +34,18 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         }
         item.button?.toolTip = "Universal Dictator"
         updateIcon()
+        // When the icon is hidden or shown (for example pushed behind the notch), log where it is and which
+        // app is in front, to find out why it disappears while dictating.
+        if let w = item.button?.window {
+            occlusionObserver = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: w,
+                                                                       queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
+                    log.notice("icon changed: \(self.describeIcon(), privacy: .public); phase \(String(describing: self.controller.phase), privacy: .public); front app \(front, privacy: .public)")
+                }
+            }
+        }
     }
 
     /// When the panel last closed: clicking the menu-bar item while the panel is open first takes focus
@@ -41,6 +53,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
     var lastClose = Date.distantPast
 
     var rightClickMonitor: Any?
+    var occlusionObserver: Any?
 
     /// Left click toggles the panel; Control-click shows the app menu with Quit (right click: see the monitor).
     @objc func clicked() {
