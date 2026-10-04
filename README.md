@@ -71,7 +71,7 @@ Using it:
 
 - **Double-tap Left Shift** (the default; change it in Settings). When the microphone is live, the icon turns red and a short sound plays. Each finished word is then typed at the cursor as if you had typed it. The word still being recognised isn't typed, so nothing is ever erased and retyped.
 - **Toggle** (default): tap Shift once to stop. **Hold to talk**: Shift, Shift-hold while talking, release to stop.
-- Stopping types the last word. Each direct dictation goes to History, marked "typed". Clicking the icon during one stops it.
+- Stopping types the last word and a space. Each direct dictation goes to History, marked "typed". Clicking the icon during one stops it.
 - It needs the Accessibility permission (System Settings › Privacy & Security › Accessibility), which the app asks for once. Nothing is typed into password fields or apps using secure keyboard entry.
 - The plan is `DIRECT_DICTATION_PLAN.md`.
 

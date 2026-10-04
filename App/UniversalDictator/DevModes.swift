@@ -20,7 +20,7 @@ import UniversalDictatorKit
 //       Needs Accessibility. Takes the keyboard focus for a few seconds.
 //   UniversalDictator --direct-selftest <audio> [--model nemotron160|nemotron560]
 //       direct dictation of <audio> into a test window of its own, through the real model and real typing;
-//       prints PASS if the window holds exactly the dictation's final text. Needs Accessibility.
+//       prints PASS if the window holds exactly the dictation's final text and a space. Needs Accessibility.
 //   UniversalDictator --snapshot <dir>
 //       renders the panel in each state to <dir>/<state>.png with stand-in sessions and exits.
 enum DevModes {
@@ -204,7 +204,7 @@ enum DevModes {
             try await Task.sleep(for: .milliseconds(800))           // the typing queue finishes
             let final = c.history.first?.text ?? ""
             let got = tv.string
-            log(got == final && !final.isEmpty ? "PASS" : "FAIL")
+            log(got == final + " " && !final.isEmpty ? "PASS" : "FAIL")             // the final text and a space
             log("typed:   \(got)")
             log("history: \(final)")
             w.orderOut(nil)

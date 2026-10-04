@@ -295,9 +295,8 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         return image
     }
 
+    /// Whether the microphone was live at the last icon update (a direct dictation plays "Tink" when it goes live).
     var wasLive = false
-    /// Played when a direct dictation's microphone goes live.
-    static let liveSound = NSSound(named: "Tink")
 
     /// Keeps the menu-bar icon in step with the dictation (listening, paused, preparing).
     func updateIcon() {
@@ -312,7 +311,10 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
             let image: NSImage?
             // Red only once the microphone is actually live (it takes a moment to wake), so red means "speak".
             let live = controller.isMicrophoneLive
-            if live, !wasLive, controller.isDirectDictating { Self.liveSound?.play() }   // no window to look at
+            if live, !wasLive, controller.isDirectDictating {                          // no window to look at
+                let played = NSSound(named: "Tink")?.play() ?? false
+                log.notice("direct dictation live: sound \(played ? "played" : "failed", privacy: .public)")
+            }
             wasLive = live
             switch controller.isDirectDictating ? .listening : controller.phase {
             case .listening: image = Self.symbol("waveform", color: live ? .systemRed : nil)

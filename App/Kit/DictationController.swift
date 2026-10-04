@@ -133,8 +133,9 @@ public final class DictationController {
     var tick: Timer?
     /// A stop is waiting for the microphone and the session to finish.
     var stopping = false
-    /// Whether the microphone is actually capturing: it takes a moment (sometimes seconds) to wake after
-    /// starting. The menu-bar icon turns red only then.
+    /// Whether the microphone is actually capturing: true once its first audio arrives, which can be a while
+    /// after it is started (a Bluetooth headset first switches to its call mode). The menu-bar icon turns red
+    /// only then.
     public private(set) var isMicrophoneLive = false
     /// Counts microphone starts and stops, so a start that finishes after a later stop doesn't count as live.
     var microphoneGeneration = 0
@@ -342,8 +343,16 @@ public final class DictationController {
         let t0 = Date()
         microphoneGeneration += 1
         let generation = microphoneGeneration
+        let firstAudio = OnceFlag()
         let onSamples: ([Float]) -> Void = { [weak self] samples in
             s.push(samples)
+            if firstAudio.claim() {
+                timing.notice("microphone live (first audio) after \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+                Task { @MainActor in
+                    guard let self, self.microphoneGeneration == generation else { return }
+                    self.isMicrophoneLive = true
+                }
+            }
             guard timed else { return }
             let now = Date()
             if now.timeIntervalSince(lastLevel) > 0.05 {
@@ -360,10 +369,6 @@ public final class DictationController {
                 do {
                     try mic.start(onSamples)
                     timing.notice("microphone started in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
-                    Task { @MainActor in
-                        guard let self, self.microphoneGeneration == generation else { return }
-                        self.isMicrophoneLive = true
-                    }
                 } catch {
                     Task { @MainActor in
                         guard let self, self.session === s else { return }
@@ -374,7 +379,6 @@ public final class DictationController {
             }
         } else {
             try mic.start(onSamples)
-            isMicrophoneLive = true
         }
         guard timed else { return }
         listenStart = Date()
@@ -530,7 +534,8 @@ public final class DictationController {
         }
     }
 
-    /// Stops a direct dictation: the microphone off, the last words typed, the text to the history.
+    /// Stops a direct dictation: the microphone off, the last words typed followed by a space (so the next
+    /// dictation or typing continues cleanly), the text to the history.
     public func stopDirectDictation() async {
         guard isDirectDictating, let s = directSession, let typer else { return }
         isDirectDictating = false
@@ -539,6 +544,7 @@ public final class DictationController {
         directUpdates?.cancel()
         directSession = nil
         typeNewWords(final, typer)
+        if !directTyped.isEmpty { typer.type(" ") }
         archive(final, model: model, copied: false, typed: true)
         directTyped = ""
     }
@@ -571,5 +577,17 @@ public final class DictationController {
     func reset() {
         committed = ""; partial = ""; editedText = ""; pausedText = ""; elapsed = 0; elapsedBefore = 0
         phase = .idle
+    }
+}
+
+/// True the first time it is claimed, from any thread.
+final class OnceFlag: @unchecked Sendable {
+    let lock = NSLock()
+    var done = false
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if done { return false }
+        done = true
+        return true
     }
 }

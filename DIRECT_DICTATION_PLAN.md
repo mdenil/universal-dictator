@@ -25,6 +25,7 @@ The app sends each word as keyboard events carrying the text (`CGEvent` with a U
   - Words are typed with the spacing the model gives them.
   - The first word of a dictation gets no leading space, so the text starts exactly at the cursor.
   - Each later word starts with a space.
+  - Ending a dictation types a space after the last word, so the next dictation, or your own typing, continues cleanly. The app can't reliably tell what is before the cursor (in a terminal, for instance), so it always adds the space.
 - **Accessibility permission:** both typing into other apps and noticing a double tap of Shift in other apps need macOS's Accessibility permission, which you grant once.
   - The app asks once, at the first launch after this feature ships. It uses macOS's own prompt, which leads to System Settings.
   - Until the permission is granted, the double tap can't be noticed at all, so nothing happens. The Settings row shows **Allow…**.
@@ -83,7 +84,7 @@ The app is signed with the Apple Development certificate (team QF8GKSXVE2), so m
 - **`DirectDictation`** (Kit): starts a session on the loaded model and the microphone. It types each newly finished word as updates arrive, and on stop types the last word, archives the text (marked typed) and turns the microphone off. Toggle and Hold to talk differ only in which hotkey events start and stop it. It shares the model, the microphone queue and History with the panel's `DictationController`, and keeps to the rules in the table above.
 - **Settings:** a shortcut field, a Mode menu, and an Accessibility row. They're stored in UserDefaults like the model and the history length.
 - **History:** `HistoryEntry` gains `typed`, and the History window shows it as "· typed".
-- **Icon and sound:** the icon turns red once the microphone is live (`DictationController.isMicrophoneLive`), not when it is asked to start. That applies to the panel too. A direct dictation also plays the system sound "Tink" at that moment.
+- **Icon and sound:** the icon turns red once the microphone's first audio arrives (`DictationController.isMicrophoneLive`), not when it is asked to start. A Bluetooth headset switches to its call mode in between. That applies to the panel too. A direct dictation also plays the system sound "Tink" at that moment.
 - **Stopping keeps the last word:** every stop waits until the microphone has stopped and handed over its last audio before the session finishes.
 
 ## Tests

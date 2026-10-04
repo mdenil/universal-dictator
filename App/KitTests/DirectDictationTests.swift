@@ -156,8 +156,8 @@ final class DirectDictationTests: XCTestCase {
         XCTAssertEqual(typer.all, "Hi Sarah, thanks")
         s.final = "Hi Sarah, thanks for the draft."
         await c.stopDirectDictation()
-        XCTAssertEqual(typer.all, "Hi Sarah, thanks for the draft.")
-        XCTAssertEqual(typer.typed, ["Hi", " Sarah, thanks", " for the draft."])
+        XCTAssertEqual(typer.all, "Hi Sarah, thanks for the draft. ")                 // a space after the last word
+        XCTAssertEqual(typer.typed, ["Hi", " Sarah, thanks", " for the draft.", " "])
         XCTAssertFalse(c.isDirectDictating); XCTAssertFalse(mic.running)
         XCTAssertEqual(c.history.first?.text, "Hi Sarah, thanks for the draft.")
         XCTAssertEqual(c.history.first?.typed, true)
@@ -237,5 +237,14 @@ final class DirectDictationTests: XCTestCase {
         let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601
         let entries = try d.decode([HistoryEntry].self, from: Data(json.utf8))
         XCTAssertEqual(entries.first?.typed, false); XCTAssertEqual(entries.first?.edited, false)
+    }
+
+    /// Nothing said: nothing typed, not even the space.
+    func testNothingSaidTypesNothing() async {
+        let c = await ready()
+        _ = await c.startDirectDictation()
+        factory.sessions[0].final = ""
+        await c.stopDirectDictation()
+        XCTAssertEqual(typer.typed, [])
     }
 }
