@@ -16,18 +16,11 @@ public enum ModelChoice: String, CaseIterable, Codable, Sendable, Identifiable {
         }
     }
 
+    /// The name the app shows: Fast (160 ms chunks) or Accurate (560 ms).
     public var displayName: String {
         switch self {
-        case .nemotron160: return "Nemotron · 160 ms"
-        case .nemotron560: return "Nemotron · 560 ms"
-        }
-    }
-
-    /// One line for a model menu: when words appear, accuracy, power.
-    public var summary: String {
-        switch self {
-        case .nemotron160: return "Words in ~0.3 s · 2.7% / 5.3% word errors"
-        case .nemotron560: return "Words in ~0.4 s · 2.5% / 4.9% word errors · lowest power"
+        case .nemotron160: return "Fast"
+        case .nemotron560: return "Accurate"
         }
     }
 }

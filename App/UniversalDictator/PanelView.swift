@@ -7,6 +7,7 @@ import UniversalDictatorKit
 struct PanelView: View {
     @Bindable var controller: DictationController
     let close: () -> Void
+    let openSettings: () -> Void
     /// Whether the text editor (paused or stopped) has the keyboard: Space and Return then type, rather than
     /// pressing Resume and Stop.
     @FocusState var editing: Bool
@@ -37,23 +38,6 @@ struct PanelView: View {
                 .foregroundStyle(controller.phase == .listening ? Color.red : controller.phase == .paused ? Color.yellow : Color.primary)
             Text("Universal Dictator").font(.system(size: 13, weight: .semibold))
             Spacer()
-            Menu {
-                ForEach(ModelChoice.allCases) { choice in
-                    Button {
-                        controller.selectModel(choice)
-                        UserDefaults.standard.set(choice.rawValue, forKey: "model")
-                    } label: {
-                        Text(choice == controller.model ? "✓ \(choice.displayName)" : choice.displayName)
-                        Text(choice.summary)
-                    }
-                    .disabled(!controller.canChangeModel)
-                }
-            } label: {
-                Text(controller.model.displayName).font(.system(size: 11, weight: .medium))
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help(controller.canChangeModel ? "Choose a model" : "Stop the dictation to change models")
         }
     }
 
@@ -162,6 +146,10 @@ struct PanelView: View {
             Button("", action: copyAndClose)
                 .keyboardShortcut("c", modifiers: .command)
                 .disabled(controller.phase != .listening && controller.phase != .paused)
+                .opacity(0)
+                .allowsHitTesting(false)
+            Button("", action: openSettings)
+                .keyboardShortcut(",", modifiers: .command)
                 .opacity(0)
                 .allowsHitTesting(false)
         }

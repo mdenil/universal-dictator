@@ -21,10 +21,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let assets = ModelAssets(directory: Bundle.main.resourceURL!.appendingPathComponent("NemotronAssets"))
         if DevModes.run(assets: assets) { return }
-        let saved = UserDefaults.standard.string(forKey: "model").flatMap(ModelChoice.init(rawValue:)) ?? .nemotron160
+        let defaults = UserDefaults.standard
+        let saved = defaults.string(forKey: "model").flatMap(ModelChoice.init(rawValue:)) ?? .nemotron160
+        let limit = defaults.object(forKey: "historyLimit") as? Int ?? 50
         controller = DictationController(model: saved, loader: EngineLoader(assets: assets), microphone: Microphone(),
                                          permission: SystemMicrophonePermission(), clipboard: SystemClipboard(),
-                                         microphoneQueue: DispatchQueue(label: "microphone", qos: .userInitiated))
+                                         microphoneQueue: DispatchQueue(label: "microphone", qos: .userInitiated),
+                                         history: FileHistoryStore.standard(bundleID: Bundle.main.bundleIdentifier ?? "dev.universaldictator.UniversalDictator"),
+                                         historyLimit: limit)
         menuBar = MenuBarPanel(controller: controller)
         if CommandLine.arguments.contains("--diagnose-start") {
             // Twice: open the panel and start a real dictation, time it, report the icon's position and whether

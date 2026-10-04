@@ -7,6 +7,10 @@ import UniversalDictatorKit
 //   UniversalDictator --selftest <audio> [--model nemotron160|nemotron560]
 //       runs <audio> through the app's controller and bundled models. Halfway it pauses, closes and reopens
 //       the panel, edits the paused text (prefixes "[edited] ") and resumes; prints the final text and exits.
+//   UniversalDictator --measure-switch
+//       loads Fast, then Accurate, then switches back through the app's controller, printing each step's
+//       time and the process's memory footprint, and exits. Run it twice: the second run shows loads with
+//       the Neural Engine compile already cached on disk.
 //   UniversalDictator --snapshot <dir>
 //       renders the panel in each state to <dir>/<state>.png with stand-in sessions and exits.
 enum DevModes {
@@ -21,6 +25,10 @@ enum DevModes {
         if let audio = argument(after: "--selftest") {
             let choice = argument(after: "--model").flatMap(ModelChoice.init(rawValue:)) ?? .nemotron160
             Task { await selftest(audio: URL(fileURLWithPath: audio), choice: choice, assets: assets); exit(0) }
+            return true
+        }
+        if CommandLine.arguments.contains("--measure-switch") {
+            Task { await measureSwitch(assets: assets); exit(0) }
             return true
         }
         if let dir = argument(after: "--snapshot") {
@@ -93,6 +101,35 @@ enum DevModes {
         }
     }
 
+    // MARK: Model switching
+
+    /// The process's memory footprint in MB (what Activity Monitor shows as Memory).
+    static func footprintMB() -> Int {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        return kr == KERN_SUCCESS ? Int(info.phys_footprint / 1_048_576) : -1
+    }
+
+    @MainActor static func measureSwitch(assets: ModelAssets) async {
+        func log(_ s: String) { FileHandle.standardError.write((s + "\n").data(using: .utf8)!) }
+        let c = DictationController(model: .nemotron160, loader: EngineLoader(assets: assets), microphone: SilentInput(),
+                                    permission: Granted(), clipboard: NoClipboard())
+        log("start: \(footprintMB()) MB")
+        for (label, choice) in [("load Fast", ModelChoice.nemotron160), ("switch to Accurate", .nemotron560), ("switch back to Fast", .nemotron160),
+                                ("switch back to Accurate", .nemotron560)] {
+            let t0 = Date()
+            if c.model == choice { c.loadModel() } else { c.selectModel(choice) }
+            while !c.isModelReady {
+                if case .failed(let m) = c.phase { log("failed: \(m)"); return }
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            log(String(format: "%@: %.2f s, %d MB", label, Date().timeIntervalSince(t0), footprintMB()))
+        }
+    }
+
     // MARK: Snapshots
 
     final class StandInSession: DictationSessionType, @unchecked Sendable {
@@ -147,12 +184,41 @@ enum DevModes {
         (c, _) = make(hang: true); c.loadModel(); await settle(); render(c, "4-preparing", dir)
         (c, _) = make(granted: false); c.loadModel(); await settle(); await c.panelOpened(); render(c, "5-microphone-denied", dir)
         (c, _) = make(fail: true); c.loadModel(); await settle(); render(c, "6-failed", dir)
+
+        // Settings and History, with a few saved dictations.
+        let now = Date()
+        let saved = MemoryHistoryStore([
+            HistoryEntry(text: "Hi Sarah, thanks for sending the draft over. I’ll take a look this afternoon and get back to you by Thursday.",
+                         date: now.addingTimeInterval(-120), model: .nemotron160, copied: true),
+            HistoryEntry(text: "Remind me to pick up milk, eggs and a loaf of sourdough on the way home.",
+                         date: now.addingTimeInterval(-840), model: .nemotron160, copied: false),
+            HistoryEntry(text: "The build is failing on the main branch because the Metal shader compiler can’t find the header file.",
+                         date: now.addingTimeInterval(-3900), model: .nemotron560, copied: true, edited: true),
+        ])
+        let h = DictationController(model: .nemotron160, loader: StandInLoader(factory: StandInFactory()), microphone: SilentInput(),
+                                    permission: Permission(granted: true), clipboard: NoClipboard(), history: saved)
+        h.loadModel(); await settle()
+        render(SettingsView(controller: h), "7-settings", dir, background: false)
+        await h.panelOpened(); h.pause(); await settle()
+        render(SettingsView(controller: h), "8-settings-paused", dir, background: false)
+        render(HistoryView(controller: h).frame(width: 520, height: 400), "9-history", dir, background: false)
     }
 
     @MainActor static func render(_ c: DictationController, _ name: String, _ dir: URL) {
-        let host = NSHostingView(rootView: PanelView(controller: c, close: {}))
+        render(PanelView(controller: c, close: {}, openSettings: {}), name, dir, background: true)
+    }
+
+    /// Renders a view to <dir>/<name>.png: on the panel's material, or on the window background.
+    @MainActor static func render<V: View>(_ view: V, _ name: String, _ dir: URL, background: Bool) {
+        let host = NSHostingView(rootView: view)
         host.frame = NSRect(origin: .zero, size: host.fittingSize)
-        let bg = PanelBackground(content: host)
+        let bg: NSView
+        if background { bg = PanelBackground(content: host) } else {
+            let plain = NSView(frame: host.frame); plain.wantsLayer = true
+            plain.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+            plain.addSubview(host); bg = plain
+        }
+        bg.frame = host.frame
         let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: host.frame.width, height: host.frame.height),
                               styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = bg

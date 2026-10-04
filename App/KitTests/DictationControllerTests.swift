@@ -33,10 +33,14 @@ final class FakeFactory: SessionFactory, @unchecked Sendable {
     func makeSession() throws -> DictationSessionType { let s = FakeSession(); sessions.append(s); return s }
 }
 
+final class LoadCounter: @unchecked Sendable { var loads: [ModelChoice] = [] }
+
 struct FakeLoader: ModelLoader {
     let factory: FakeFactory
     var fail = false
+    var counter = LoadCounter()
     func load(_ choice: ModelChoice) async throws -> SessionFactory {
+        counter.loads.append(choice)
         if fail { throw EngineError.io("no model") }
         return factory
     }
@@ -360,5 +364,124 @@ final class DictationControllerTests: XCTestCase {
         await c.panelOpened()
         for _ in 0..<50 where c.phase != .listening { await Task.yield(); try? await Task.sleep(for: .milliseconds(5)) }
         XCTAssertEqual(c.phase, .listening)
+    }
+
+    // MARK: History kept between launches
+
+    func entry(_ text: String, _ minutesAgo: Double) -> HistoryEntry {
+        HistoryEntry(text: text, date: Date(timeIntervalSinceNow: -60 * minutesAgo), model: .nemotron160, copied: false)
+    }
+
+    func controller(history: HistoryStore, limit: Int = 50) -> DictationController {
+        DictationController(model: .nemotron160, loader: FakeLoader(factory: factory), microphone: mic, permission: FakePermission(),
+                            clipboard: clip, history: history, historyLimit: limit)
+    }
+
+    func testHistorySurvivesARelaunch() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("history-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let first = controller(history: FileHistoryStore(url: url))
+        first.archive("older", model: .nemotron560, copied: true)
+        first.archive("newer", model: .nemotron160, copied: false)
+        let second = controller(history: FileHistoryStore(url: url))
+        // The file keeps dates to the second (ISO 8601), everything else exactly.
+        XCTAssertEqual(second.history.map(\.id), first.history.map(\.id))
+        XCTAssertEqual(second.history.map(\.copied), [false, true])
+        for (a, b) in zip(second.history, first.history) { XCTAssertEqual(a.date.timeIntervalSince1970, b.date.timeIntervalSince1970, accuracy: 1) }
+        XCTAssertEqual(second.history.map(\.text), ["newer", "older"])
+        XCTAssertEqual(second.history.last?.model, .nemotron560)
+    }
+
+    func testHistoryKeepsTheNewestUpToTheLimit() {
+        let store = MemoryHistoryStore()
+        let c = controller(history: store, limit: 3)
+        for i in 1...5 { c.archive("dictation \(i)", model: .nemotron160, copied: false) }
+        XCTAssertEqual(c.history.map(\.text), ["dictation 5", "dictation 4", "dictation 3"])
+        XCTAssertEqual(store.entries.count, 3)
+    }
+
+    func testLoweringTheLimitTrimsAtOnce() {
+        let store = MemoryHistoryStore((1...5).map { entry("e\($0)", Double($0)) })
+        let c = controller(history: store)
+        c.historyLimit = 2
+        XCTAssertEqual(c.history.map(\.text), ["e1", "e2"])
+        XCTAssertEqual(store.entries.map(\.text), ["e1", "e2"])
+    }
+
+    func testClearHistoryEmptiesTheFile() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("history-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let c = controller(history: FileHistoryStore(url: url))
+        c.archive("gone soon", model: .nemotron160, copied: false)
+        c.clearHistory()
+        XCTAssertTrue(c.history.isEmpty)
+        XCTAssertTrue(FileHistoryStore(url: url).load().isEmpty)
+    }
+
+    func testDamagedHistoryFileGivesAnEmptyHistory() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("history-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Data("{ not json".utf8).write(to: url)
+        let c = controller(history: FileHistoryStore(url: url))
+        XCTAssertTrue(c.history.isEmpty)
+        c.archive("fresh", model: .nemotron160, copied: false)
+        XCTAssertEqual(FileHistoryStore(url: url).load().map(\.text), ["fresh"])
+    }
+
+    func testEditingAnEntrySavesItInPlace() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("history-\(UUID()).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let c = controller(history: FileHistoryStore(url: url))
+        c.archive("first", model: .nemotron160, copied: false)
+        c.archive("secnod", model: .nemotron160, copied: true)
+        c.archive("third", model: .nemotron160, copied: false)
+        let target = c.history[1], date = target.date
+        c.editHistory(target.id, text: "second ")
+        let reloaded = controller(history: FileHistoryStore(url: url)).history
+        XCTAssertEqual(reloaded.map(\.text), ["third", "second", "first"])
+        XCTAssertEqual(reloaded[1].edited, true); XCTAssertEqual(reloaded[1].copied, true)
+        XCTAssertEqual(reloaded[1].date.timeIntervalSince1970, date.timeIntervalSince1970, accuracy: 1)
+        XCTAssertEqual(reloaded[0].edited, false)
+        c.copyFromHistory(c.history[1])
+        XCTAssertEqual(clip.text, "second")
+    }
+
+    func testEmptyOrUnchangedEditIsIgnored() {
+        let c = controller(history: MemoryHistoryStore())
+        c.archive("keep", model: .nemotron160, copied: false)
+        c.editHistory(c.history[0].id, text: "  \n")
+        c.editHistory(c.history[0].id, text: "keep")
+        XCTAssertEqual(c.history[0].text, "keep"); XCTAssertFalse(c.history[0].edited)
+    }
+
+    func testDeleteOneEntry() {
+        let c = controller(history: MemoryHistoryStore())
+        c.archive("a", model: .nemotron160, copied: false); c.archive("b", model: .nemotron160, copied: false)
+        c.deleteHistory(c.history[0].id)
+        XCTAssertEqual(c.history.map(\.text), ["a"])
+    }
+
+    // MARK: Models
+
+    /// Switching away and back doesn't load the first model again.
+    func testSwitchingBackReusesTheLoadedModel() async {
+        let counter = LoadCounter()
+        let c = DictationController(model: .nemotron160, loader: FakeLoader(factory: factory, counter: counter), microphone: mic,
+                                    permission: FakePermission(), clipboard: clip)
+        c.loadModel()
+        for _ in 0..<50 where c.phase == .preparing { try? await Task.sleep(for: .milliseconds(5)) }
+        c.selectModel(.nemotron560)
+        for _ in 0..<50 where c.phase == .preparing { try? await Task.sleep(for: .milliseconds(5)) }
+        c.selectModel(.nemotron160)
+        XCTAssertEqual(c.phase, .idle); XCTAssertTrue(c.isModelReady)
+        XCTAssertEqual(counter.loads, [.nemotron160, .nemotron560])
+    }
+
+    func testModelCantChangeWhilePaused() async {
+        let c = await makeController()
+        await c.panelOpened()
+        c.pause()
+        c.selectModel(.nemotron560)
+        XCTAssertEqual(c.model, .nemotron160)
     }
 }

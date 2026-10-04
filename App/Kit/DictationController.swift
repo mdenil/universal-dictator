@@ -75,16 +75,6 @@ public struct SystemClipboard: Clipboard {
     }
 }
 
-/// A finished dictation, kept for the history menu.
-public struct HistoryEntry: Identifiable, Equatable, Sendable {
-    public let id = UUID()
-    public let text: String
-    public let date: Date
-    public let model: ModelChoice
-    /// Whether the text was copied (Copy or ⌘C) rather than left when the panel closed.
-    public let copied: Bool
-}
-
 @MainActor @Observable
 public final class DictationController {
     public enum Phase: Equatable {
@@ -117,9 +107,16 @@ public final class DictationController {
     public private(set) var level: Float = 0
     /// Whether the panel is showing. The microphone only runs while it is.
     public private(set) var isPanelOpen = false
-    /// Finished dictations, newest first (this session only).
+    /// Finished dictations, newest first, saved between launches.
     public private(set) var history: [HistoryEntry] = []
-    public var historyLimit = 50
+    /// How many dictations the history keeps; lowering it drops the oldest at once.
+    public var historyLimit = 50 {
+        didSet { if trimHistory() { historyStore.save(history) } }
+    }
+    public static let historyLimits = [10, 25, 50, 100, 200]
+    let historyStore: HistoryStore
+    /// Loaded models by choice: switching back to a model loaded earlier in this run is immediate.
+    var loadedModels: [ModelChoice: SessionFactory] = [:]
 
     let loader: ModelLoader
     let microphone: AudioInput
@@ -141,8 +138,11 @@ public final class DictationController {
     let microphoneQueue: DispatchQueue?
 
     public init(model: ModelChoice, loader: ModelLoader, microphone: AudioInput, permission: MicrophonePermission, clipboard: Clipboard,
-                microphoneQueue: DispatchQueue? = nil) {
+                microphoneQueue: DispatchQueue? = nil, history: HistoryStore = MemoryHistoryStore(), historyLimit: Int = 50) {
         self.microphoneQueue = microphoneQueue
+        self.historyStore = history
+        self.historyLimit = historyLimit
+        self.history = Array(history.load().prefix(historyLimit))
         self.model = model
         self.loader = loader
         self.microphone = microphone
@@ -163,11 +163,18 @@ public final class DictationController {
         factory = nil
         loadedModel = nil
         let choice = model
+        if let f = loadedModels[choice] {
+            factory = f
+            loadedModel = choice
+            if isFailure { phase = .idle }
+            return
+        }
         if phase == .idle || phase == .done || isFailure { phase = .preparing }
         loadTask = Task {
             do {
                 let f = try await loader.load(choice)
                 guard !Task.isCancelled, choice == self.model else { return }
+                self.loadedModels[choice] = f
                 self.factory = f
                 self.loadedModel = choice
                 if self.phase == .preparing { self.phase = self.text.isEmpty && self.editedText.isEmpty ? .idle : .done }
@@ -230,13 +237,39 @@ public final class DictationController {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { return }
         history.insert(HistoryEntry(text: t, date: Date(), model: model, copied: copied), at: 0)
-        if history.count > historyLimit { history.removeLast(history.count - historyLimit) }
+        _ = trimHistory()
+        historyStore.save(history)
+    }
+
+    /// Drops the oldest entries beyond the limit; true if any went.
+    func trimHistory() -> Bool {
+        guard history.count > historyLimit else { return false }
+        history.removeLast(history.count - historyLimit)
+        return true
     }
 
     /// Copies a history entry.
     public func copyFromHistory(_ entry: HistoryEntry) { clipboard.copy(entry.text) }
 
-    public func clearHistory() { history.removeAll() }
+    /// Saves an edit made in the History window. The entry keeps its place and time and is marked edited;
+    /// empty text is refused (Delete removes an entry).
+    public func editHistory(_ id: UUID, text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, let i = history.firstIndex(where: { $0.id == id }), history[i].text != t else { return }
+        history[i].text = t
+        history[i].edited = true
+        historyStore.save(history)
+    }
+
+    public func deleteHistory(_ id: UUID) {
+        history.removeAll { $0.id == id }
+        historyStore.save(history)
+    }
+
+    public func clearHistory() {
+        history.removeAll()
+        historyStore.save(history)
+    }
 
     /// The app is quitting: whatever is dictated or edited goes to the history (synchronously, with the text
     /// as shown; a listening session's last words are not waited for).

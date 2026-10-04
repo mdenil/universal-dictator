@@ -19,7 +19,8 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         panel = DropDownPanel()
         super.init()
-        host = NSHostingView(rootView: PanelView(controller: controller, close: { [weak self] in self?.close() }))
+        host = NSHostingView(rootView: PanelView(controller: controller, close: { [weak self] in self?.close() },
+                                                 openSettings: { [weak self] in self?.showSettings() }))
         panel.contentView = PanelBackground(content: host)
         panel.delegate = self
         item.button?.target = self
@@ -48,15 +49,102 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         if e?.modifierFlags.contains(.control) == true { showAppMenu() } else { toggle() }
     }
 
+    /// The right-click menu (design: Figma "History (draft)"): the five latest dictations (choosing one
+    /// copies it), Show All History…, Settings…, Quit.
     func showAppMenu() {
         close()
         let menu = NSMenu()
+        menu.addItem(.sectionHeader(title: "Recent dictations"))
+        if controller.history.isEmpty {
+            let none = NSMenuItem(title: "No dictations yet", action: nil, keyEquivalent: "")
+            none.isEnabled = false
+            menu.addItem(none)
+        }
+        for entry in controller.history.prefix(5) {
+            let i = NSMenuItem(title: Self.firstLine(entry.text), action: #selector(copyRecent(_:)), keyEquivalent: "")
+            i.target = self
+            i.representedObject = entry.id
+            i.badge = NSMenuItemBadge(string: Self.age(entry.date))
+            menu.addItem(i)
+        }
+        menu.addItem(.separator())
+        let all = NSMenuItem(title: "Show All History…", action: #selector(showHistory), keyEquivalent: "y")
+        all.target = self
+        all.isEnabled = !controller.history.isEmpty
+        menu.addItem(all)
+        let settings = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+        menu.addItem(.separator())
         let quit = NSMenuItem(title: "Quit Universal Dictator", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         quit.target = NSApp
         menu.addItem(quit)
+        menu.autoenablesItems = false
         item.menu = menu                     // shown under the icon like any menu-bar menu, then detached so
         item.button?.performClick(nil)       // left clicks keep opening the panel
         item.menu = nil
+    }
+
+    /// A recent dictation chosen in the menu: copied, and the icon shows a check mark for a moment.
+    @objc func copyRecent(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? UUID, let entry = controller.history.first(where: { $0.id == id }) else { return }
+        controller.copyFromHistory(entry)
+        item.button?.image = Self.symbol("checkmark", color: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.updateIcon() }
+    }
+
+    static func firstLine(_ text: String) -> String {
+        let line = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? text
+        return line.count > 40 ? String(line.prefix(39)).trimmingCharacters(in: .whitespaces) + "…" : line
+    }
+
+    /// "now", "2 min", "3 h", "Yesterday", or the date.
+    static func age(_ date: Date) -> String {
+        let s = Date().timeIntervalSince(date)
+        if s < 60 { return "now" }
+        if s < 3600 { return "\(Int(s / 60)) min" }
+        if Calendar.current.isDateInToday(date) { return "\(Int(s / 3600)) h" }
+        if Calendar.current.isDateInYesterday(date) { return "Yesterday" }
+        return date.formatted(.dateTime.day().month(.abbreviated))
+    }
+
+    // MARK: Windows
+
+    var settingsWindow: NSPanel?
+    var historyWindow: NSPanel?
+
+    @objc func showSettings() {
+        if settingsWindow == nil {
+            settingsWindow = Self.window(title: "Settings", content: SettingsView(controller: controller), resizable: false)
+        }
+        Self.present(settingsWindow!)
+    }
+
+    @objc func showHistory() {
+        if historyWindow == nil {
+            historyWindow = Self.window(title: "History", content: HistoryView(controller: controller), resizable: true)
+        }
+        Self.present(historyWindow!)
+    }
+
+    /// A titled window that takes the keyboard without activating the app, like the drop-down panel (an
+    /// active menu-bar app can push status icons behind the notch).
+    static func window<Content: View>(title: String, content: Content, resizable: Bool) -> NSPanel {
+        var style: NSWindow.StyleMask = [.titled, .closable, .nonactivatingPanel]
+        if resizable { style.insert(.resizable) }
+        let w = NSPanel(contentRect: .zero, styleMask: style, backing: .buffered, defer: true)
+        w.title = title
+        w.contentViewController = NSHostingController(rootView: content)
+        w.isReleasedWhenClosed = false
+        w.hidesOnDeactivate = false
+        w.becomesKeyOnlyIfNeeded = false
+        w.center()
+        return w
+    }
+
+    static func present(_ w: NSPanel) {
+        w.orderFrontRegardless()
+        w.makeKey()
     }
 
     @objc func toggle() {
