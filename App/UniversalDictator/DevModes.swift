@@ -21,6 +21,8 @@ import UniversalDictatorKit
 //   UniversalDictator --direct-selftest <audio> [--model nemotron160|nemotron560]
 //       direct dictation of <audio> into a test window of its own, through the real model and real typing;
 //       prints PASS if the window holds exactly the dictation's final text and a space. Needs Accessibility.
+//   UniversalDictator --button-probe
+//       reports what a headset button press arrives as, with the microphone off and on (see ButtonProbe), and exits.
 //   UniversalDictator --snapshot <dir>
 //       renders the panel in each state to <dir>/<state>.png with stand-in sessions and exits.
 enum DevModes {
@@ -52,6 +54,10 @@ enum DevModes {
         }
         if CommandLine.arguments.contains("--measure-switch") {
             Task { await measureSwitch(assets: assets); exit(0) }
+            return true
+        }
+        if CommandLine.arguments.contains("--button-probe") {
+            ButtonProbe.run()
             return true
         }
         if let dir = argument(after: "--snapshot") {

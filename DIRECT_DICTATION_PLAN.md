@@ -105,6 +105,16 @@ The app is signed with the Apple Development certificate (team QF8GKSXVE2), so m
 
 **By hand:** the modifier-key test above, plus a real dictation into TextEdit, Chrome, Slack and Terminal in both modes.
 
+## Headset button: not built
+
+**The idea:** hands-free dictation with a Bluetooth headset. A press of the headset's button starts it. A spoken stop word ("over", then a pause) ends it, with the stop word left out of the text.
+
+**Why it isn't built:** measured on a Shokz OpenComm2 (Bluetooth, macOS 26) with `UniversalDictator --button-probe`:
+- **Microphone off:** each press reaches the app only as a media command (play, pause; a double press is "next track"). macOS sends these to the app that is "now playing", so to receive them the app would have to stay the now-playing app all the time, and show in Control Center's Now Playing. That is not acceptable. No media-key event reaches an event tap.
+- **Microphone on** (the headset in its call mode): a press reaches the app by no route at all, so the button can't stop a dictation.
+
+**What would make it worth building:** a way to receive the button press while the microphone is off without being the now-playing app (for example a headset whose button arrives as an ordinary key or HID event). Rerun `--button-probe` with another headset or a new macOS to check.
+
 ## Order of work
 
 1. The held-modifier test (Shift and ⌃⌥), using a throwaway typing prototype. I'll report the result, which decides how Push to talk types.

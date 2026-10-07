@@ -229,10 +229,11 @@ enum StartSound {
 
     static func play() -> Bool { sound?.stop(); return sound?.play() ?? false }
 
-    static func wav() -> Data {
+    /// `notes`: (frequency in Hz, length in ms), played in order.
+    static func wav(notes: [(Double, Double)] = [(587.33, 90.0), (880.0, 110.0)]) -> Data {
         let rate = 44100.0
         var samples: [Int16] = []
-        for (freq, ms) in [(587.33, 90.0), (880.0, 110.0)] {
+        for (freq, ms) in notes {
             let n = Int(rate * ms / 1000)
             for i in 0..<n {
                 let t = Double(i) / rate
