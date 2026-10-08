@@ -58,7 +58,7 @@ open build/DerivedData/Build/Products/Release/UniversalDictator.app
 
 Using it:
 
-- **Click the icon:** the panel opens and listening starts; the icon turns red. Words appear about 0.3 s after you say them; the grey word is still being recognised.
+- **Click the icon:** the panel opens and listening starts; the icon's bars start moving. Words appear about 0.3 s after you say them; the grey word is still being recognised.
 - **Copy ⌘C** (the button or the shortcut) stops, copies the whole text and closes the panel: click, talk, ⌘C, then ⌘V wherever you want it.
 - **Space** (or Pause) pauses; the icon turns yellow and the text becomes editable. **Resume** keeps your edits and adds new words after them. A paused dictation survives closing the panel: the next click reopens it, still paused.
 - **Return** (or Stop) ends the dictation; the text stays editable. **Copy** (⌘Return) copies it and closes the panel; focus returns to the app you were in, ready for ⌘V. **New** starts again.
@@ -69,7 +69,7 @@ Using it:
 
 **Direct dictation** types straight into the focused text field of any app, with no window:
 
-- **Double-tap Left Shift** (the default). In Settings the shortcut can be a double tap of any modifier key (Left or Right ⇧ ⌃ ⌥ ⌘) or a key combination (⌃A, ⌘⇧D, ⇧A…); combinations that would take over ordinary typing or a standard command everywhere show a warning. When the microphone is live, the icon turns red and a short sound plays. Each word is then typed at the cursor as it is recognised, as if you had typed it, so the last word is there as soon as you pause.
+- **Double-tap Left Shift** (the default). In Settings the shortcut can be a double tap of any modifier key (Left or Right ⇧ ⌃ ⌥ ⌘) or a key combination (⌃A, ⌘⇧D, ⇧A…); combinations that would take over ordinary typing or a standard command everywhere show a warning. When the microphone is live, the icon's bars start moving and a short sound plays. Each word is then typed at the cursor as it is recognised, as if you had typed it, so the last word is there as soon as you pause.
 - **Toggle** (default): tap Shift once to stop. **Push to talk**: Shift, Shift-hold while talking, release to stop.
 - Stopping types the last word and a space. Each direct dictation goes to History, marked "typed". Clicking the icon during one stops it.
 - It needs the Accessibility permission (System Settings › Privacy & Security › Accessibility), which the app asks for once. Nothing is typed into password fields or apps using secure keyboard entry.

@@ -251,7 +251,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
             return "notch x \(Int(l))–\(Int(r))"
         } ?? "no screen"
         return "icon frame x \(Int(w.frame.minX))–\(Int(w.frame.maxX)) y \(Int(w.frame.minY)), visible \(w.isVisible), " +
-            "occlusion-visible \(w.occlusionState.contains(.visible)), \(notch)"
+            "occlusion-visible \(w.occlusionState.contains(.visible)), animating \(animation != nil), \(notch)"
     }
 
     func open(startDictation: Bool = true) {
@@ -296,6 +296,22 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         return image
     }
 
+    var animation: Timer?
+
+    /// Starts or stops the moving waveform (20 frames a second; it keeps moving while a menu is open).
+    func animate(_ on: Bool) {
+        guard on != (animation != nil) else { return }
+        animation?.invalidate()
+        animation = nil
+        guard on else { return }
+        let start = Date()
+        let tick = { [weak self] in self?.item.button?.image = WaveIcon.image(WaveIcon.heights(at: Date().timeIntervalSince(start))) }
+        tick()
+        let t = Timer(timeInterval: 1.0 / 20, repeats: true) { _ in MainActor.assumeIsolated { tick() } }
+        RunLoop.main.add(t, forMode: .common)
+        animation = t
+    }
+
     /// Whether the microphone was live at the last icon update (a direct dictation plays the start sound when it goes live).
     var wasLive = false
 
@@ -307,10 +323,10 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
                 Task { @MainActor [weak self] in self?.controller.panelClosed() }
             }
             log.notice("phase \(String(describing: self.controller.phase), privacy: .public)")
-            // One shape; the colour tells the state: as the menu bar (idle, getting ready), red (listening),
-            // yellow (paused). Problems that need the user show a warning triangle.
+            // One shape: still in the menu bar's colour (idle, getting ready), moving (listening), yellow (paused).
+            // Problems that need the user show a warning triangle.
             let image: NSImage?
-            // Red only once the microphone is actually live (it takes a moment to wake), so red means "speak".
+            // Moving only once the microphone is actually live (it takes a moment to wake), so moving means "speak".
             let live = controller.isMicrophoneLive
             if live, !wasLive, controller.isDirectDictating {                          // no window to look at
                 let played = StartSound.play()
@@ -318,12 +334,13 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
             }
             wasLive = live
             switch controller.directDictationFailed ? .microphoneDenied : controller.isDirectDictating ? .listening : controller.phase {
-            case .listening: image = Self.symbol("waveform", color: live ? .systemRed : nil)
+            case .listening where live: image = nil
             case .paused: image = Self.symbol("waveform", color: .systemYellow)
             case .microphoneDenied, .accessibilityNeeded, .failed: image = Self.symbol("exclamationmark.triangle", color: nil)
             default: image = Self.symbol("waveform", color: nil)
             }
-            item.button?.image = image
+            animate(image == nil)
+            if let image { item.button?.image = image }
         } onChange: {
             Task { @MainActor [weak self] in self?.updateIcon() }
         }
