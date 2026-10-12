@@ -70,7 +70,7 @@ func writeStepLog(_ times: [Double]) throws {
 func nemotronUsesANE(modelDir: URL, schedule: NemotronSchedule) -> Bool {
     guard option("--backend", "ane") == "ane" else { return false }
     if NemotronANEEncoder.available(assets: ModelAssets(directory: modelDir), schedule: schedule) { return true }
-    FileHandle.standardError.write("Neural Engine models not found in \(modelDir.path)/coreml; using Metal (build them with reference/coreml/nemotron_ane.py --stateful)\n".data(using: .utf8)!)
+    FileHandle.standardError.write("Neural Engine models not found in \(modelDir.path)/coreml; using Metal (build them with tools/nemotron_ane.py --stateful)\n".data(using: .utf8)!)
     return false
 }
 
@@ -247,7 +247,7 @@ do {
             let names = NemotronANEEncoder.modelNames(choice.schedule)
             for name in [names.sub, names.state].compactMap({ $0 }) {
                 guard let compiled = try assets.compiledCoreMLModel(name) else {
-                    throw EngineError.io("\(name) not found in \(src.path)/coreml (reference/coreml/nemotron_ane.py --stateful)")
+                    throw EngineError.io("\(name) not found in \(src.path)/coreml (tools/nemotron_ane.py --stateful)")
                 }
                 try fm.copyItem(at: compiled, to: out.appendingPathComponent(name + ".mlmodelc"))
             }

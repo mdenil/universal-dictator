@@ -1,6 +1,6 @@
 # Parakeet Unified English 0.6B: behavioural spec
 
-Checkpoint: `models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b.nemo` (2,474,055,680 bytes). Class `EncDecRNNTBPEModel`. The config is identical to `docs/research/parakeet/model_config.yaml`. The tokenizer is byte-identical to Nemotron's (SHA-256 `07d4e5a6…b0a9`).
+Checkpoint: `models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b.nemo` (2,474,055,680 bytes). Class `EncDecRNNTBPEModel`. The config is the checkpoint's own `model_config.yaml` (inside the `.nemo` archive). The tokenizer is byte-identical to Nemotron's (SHA-256 `07d4e5a6…b0a9`).
 
 This model shares its layer structure, positional encoding, decoder, joint and tokenizer with Nemotron. Where a section says "as Nemotron", `docs/specs/nemotron.md` gives the exact semantics and citations. This file states every difference in full.
 
@@ -53,7 +53,7 @@ Same op order as Nemotron §3: `x + ½FF1`, `+ MHSA`, `+ Conv`, `+ ½FF2`, then 
 - **`conv_norm_type: batch_norm`**: `nn.BatchNorm1d(1024, eps=1e-5)` in eval mode, using the running statistics: `y = (x - running_mean)/sqrt(running_var + 1e-5) * weight + bias`. It can be folded into the depthwise conv: `w' = w·s`, `b' = (b - μ)·s + β`, with `s = γ/sqrt(σ² + 1e-5)`.
 - `pos_bias_u/v` are per layer (`untie_biases: true`), [8,128] each.
 
-**`conv_context_style: dcc`** (Dynamic Chunked Convolution) has no effect at inference in this code. `c42:conformer_encoder.py:358-359` validates and stores the value, and nothing reads it. Current `main` (`1f73a91`, the copy in `docs/research/parakeet/enc.py:373-374`) is the same, and `conformer_modules.py` has no DCC branch. So the depthwise conv is a plain symmetric k=9 conv over the whole encoder input. It is **not** limited to chunk boundaries. See Open questions.
+**`conv_context_style: dcc`** (Dynamic Chunked Convolution) has no effect at inference in this code. `c42:conformer_encoder.py:358-359` validates and stores the value, and nothing reads it. Current NeMo `main` (`1f73a91`, `nemo/collections/asr/modules/conformer_encoder.py:373-374`) is the same, and `conformer_modules.py` has no DCC branch. So the depthwise conv is a plain symmetric k=9 conv over the whole encoder input. It is **not** limited to chunk boundaries. See Open questions.
 
 ## 4. Attention mask: `chunked_limited_with_rc` [70, 2, 5]
 

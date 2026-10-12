@@ -55,7 +55,7 @@ wheels = [
 ]
 
 [[package]]
-name = "dictator-coreml-study"
+name = "dictator-tools"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

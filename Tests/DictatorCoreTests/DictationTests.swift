@@ -2,7 +2,7 @@ import XCTest
 import DictatorCore
 
 /// The dictation API on the Neural Engine, with no Metal in the process. Needs the Nemotron model folder
-/// (Core ML models from reference/coreml/nemotron_ane.py --stateful); skipped without it.
+/// (Core ML models from tools/nemotron_ane.py --stateful); skipped without it.
 final class DictationTests: XCTestCase {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     var assets: ModelAssets { ModelAssets(directory: root.appendingPathComponent("models/nemotron-speech-streaming-en-0.6b")) }

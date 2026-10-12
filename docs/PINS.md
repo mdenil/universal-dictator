@@ -9,6 +9,8 @@
 | Nemotron Speech Streaming 0.6B | `nvidia/nemotron-speech-streaming-en-0.6b` @ `ebe59e5a817142986528bbbee5dba8db7b38ed50` |
 | Parakeet Unified 0.6B | `nvidia/parakeet-unified-en-0.6b` @ `fe53cd885760c96b6a5f51a0bfd362cb4584a98b` |
 | Voxtral Mini 4B Realtime | `mistralai/Voxtral-Mini-4B-Realtime-2602` @ `2769294da9567371363522aac9bbcfdd19447add` |
+| sherpa-onnx export, Nemotron 160 ms (comparison only) | `csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-160ms-2026-04-25` @ `9660703a1289d5b5c0c6470ced80eb52096fc740` |
+| sherpa-onnx export, Nemotron 160 ms int8 (comparison only) | `csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-160ms-int8-2026-04-25` @ `237e551abd7a411ef92d3595454d9f6ab5fe7d6c` |
 
 | File | SHA-256 |
 |---|---|
@@ -27,7 +29,7 @@
 |---|---|---|
 | `reference/nemo` | nemo_toolkit 2.7.3, torch 2.14.0, transformers 4.57.6 (locked in `uv.lock`) | NeMo 2.7.3 is the runtime named on the Parakeet model card. It lacks Parakeet's `chunked_limited_with_rc` mask, so `reference/nemo/common.py` applies the upstream encoder methods verbatim from NeMo `c42e4445127650492f96a7b47a39a4f449fdcf50` (sparse checkout in `third_party/NeMo`). See `docs/specs/parakeet.md` §0. |
 | `reference/voxtral` | transformers 5.17.0, mistral-common 1.12.0, torch 2.14.0 | These are the transformers and mistral-common versions with `VoxtralRealtime` support. |
-| `reference/coreml` | coremltools 9.0, torch 2.7.0 | Used only by the M5 Neural Engine study. |
+| `tools` | coremltools 9.0, torch 2.7.0 (locked in `uv.lock`) | Builds what the engine and the app load: `export_weights.py` (.nemo → safetensors) and `nemotron_ane.py` (the Neural Engine encoder). |
 
 ## Reference ports
 

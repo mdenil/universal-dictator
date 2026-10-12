@@ -49,7 +49,7 @@ Raw output: `artifacts/timing_m6/`; command: `scratch/m6_timing.sh`.
 
 ## Nemotron on the Neural Engine (default backend)
 
-Nemotron's encoder step runs through Core ML on the Neural Engine by default (`--backend metal` selects the GPU; missing Core ML models fall back to Metal). The frontend and RNN-T decoding stay on the CPU. Models come from `reference/coreml/nemotron_ane.py`:
+Nemotron's encoder step runs through Core ML on the Neural Engine by default (`--backend metal` selects the GPU; missing Core ML models fall back to Metal). The frontend and RNN-T decoding stay on the CPU. Models come from `tools/nemotron_ane.py`:
 
 - **Stateful (default):** one steady-state model per latency with the K/V and conv caches held as Core ML state. The first chunk runs through the same model behind 16 leading zero mel rows masked at every subsampling stage (16 → 8 → 4 → 2 rows, the 2 dropped frames), which reproduces its causal zero padding; on the CPU its outputs match the stateless models to 0.004–0.006 (outputs up to about 1.4).
 - **Stateless (`DICTATOR_ANE_STATELESS=1`):** first-chunk and steady models with the caches passed through inputs and outputs.
@@ -65,7 +65,7 @@ Measured 2026-09-30, quiet machine:
 
 Accuracy, first 200 utterances, against Metal on the same utterances: 160 ms 2.05 / 5.73% (Metal 2.10 / 5.77%), 560 ms test-other 5.02% (Metal 5.02%). 4–10% of transcripts differ (fp16); stateful and stateless transcripts are identical on the 33.9 s clip at both latencies.
 
-Power (`sudo scripts/power.sh ane`), looping a 5-minute file with a warm compile cache; idle 0.31 W:
+Power (`sudo scripts/power.sh ane`; the script was removed in the release cleanup and is in the history before it), looping a 5-minute file with a warm compile cache; idle 0.31 W:
 
 | | CPU | GPU | Neural Engine | Total |
 |---|---|---|---|---|

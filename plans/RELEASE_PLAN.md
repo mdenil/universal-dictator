@@ -137,7 +137,7 @@ Removing `--diagnose-start` also removes `Microphone.restartForDiagnosis()` and 
 - `reference/nemo` and `reference/voxtral`, which make the golden tensors for `ladder` and the reference WER.
 - `eval/` scoring, alignment and latency.
 - `eval/dictation_prompts.txt`, which is generic text.
-- `scripts/heavy.sh` and `verify_pins.sh`. `verify_pins.sh` will also check the Parakeet weights, which it misses today.
+- `scripts/heavy.sh` and `verify_pins.sh`. (The audit said `verify_pins.sh` misses the Parakeet weights. It doesn't: Parakeet is published only as the `.nemo`, which is pinned.)
 - `scripts/eval_sherpa.sh` with `reference/competitors`. It backs the sherpa-onnx comparison in PERF_LOG, and gets the missing download step.
 
 **The app's build tools get their own small folder.**

@@ -244,7 +244,7 @@ Consolidated prefix `…` = `mm_streams_embeddings.embedding_module.` (+ `whispe
 
 - dev20 (10 test-clean + 10 test-other, 559 words), offline, MPS fp32, Whisper English normalizer + jiwer: **WER 6.08%** (30 S, 2 D, 2 I). The errors are dominated by dialect spellings in test-other ("scuse me … yo figger" → "excuse me daniel …") and one proper-noun passage (2609-156975-0004). dev20 is too small and too hard to compare with the published figures.
 - Published figures (paper Table 5, 480 ms): LibriSpeech test-clean **2.08%**, test-other **5.54%**. The model card gives no LibriSpeech numbers.
-- The 100-utterance test-clean and test-other runs (MPS bf16, `wer.py --librispeech … --n 100`) were queued but had not finished when this was written.
+- 100 utterances per set (MPS bf16, `wer.py --librispeech … --n 100`): test-clean **1.72%**, test-other **5.28%** (`docs/DISCREPANCIES.md`).
 
 ## 13. Open questions
 
@@ -258,5 +258,5 @@ Consolidated prefix `…` = `mm_streams_embeddings.embedding_module.` (+ `whispe
 | t_cond formula | §6.2 | `MOD:838-851`; `spec_check.py` 1.2e-7 |
 | Sliding window semantics | W keys including self | `MASK:93-102`; off-by-one test (§10) |
 | EOS | Never emitted on dev20; offline generation ends at the length cap | §10 |
-| Streaming vs offline token identity | **Unresolved at the time of writing**: `stream_ref.py` was running | — |
-| Noise floor | **Unresolved at the time of writing**: runs were queued (`noise_floor.json` not yet written) | — |
+| Streaming vs offline token identity | **Open**: no result was recorded | — |
+| Noise floor | **Open**: no result was recorded (`noise_floor.json` was never written) | — |

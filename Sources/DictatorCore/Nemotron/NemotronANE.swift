@@ -2,7 +2,7 @@ import CoreML
 import Foundation
 
 /// Nemotron's cache-aware streaming encoder step on the Neural Engine, through stateful Core ML models
-/// built by `reference/coreml/nemotron_ane.py --stateful`: the K/V and conv caches live in Core ML state
+/// built by `tools/nemotron_ane.py --stateful`: the K/V and conv caches live in Core ML state
 /// and are updated in place. One steady-state model per latency; the 560 ms step is split into a
 /// subsampling model and a layers model (the fused graph fails the Neural Engine compile). Same schedule
 /// and masking as `FastConformerEncoder.encodeStreamStep`; a short final chunk is zero-padded to the

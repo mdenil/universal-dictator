@@ -1,7 +1,7 @@
 [project]
-name = "dictator-coreml-study"
+name = "dictator-tools"
 version = "0.1.0"
-description = "M5 accelerator placement study: CoreML (Neural Engine) versions of encoder steps. Not shipped."
+description = "Converts the NeMo checkpoints for the Swift engine and builds Nemotron's Core ML (Neural Engine) encoder for the Mac app."
 requires-python = "==3.12.*"
 dependencies = ["coremltools==9.0", "torch==2.7.0", "numpy<2.3", "safetensors"]
 

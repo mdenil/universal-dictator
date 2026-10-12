@@ -6,7 +6,7 @@ Writes, next to the .nemo file, a directory `nemo_extracted/` containing:
   - tokenizer.model etc.  the SentencePiece tokenizer files
   - manifest.json         tensor names/shapes and the sha256 of the source .nemo
 
-Usage: python export_weights.py ../../models/<model-dir>/<name>.nemo
+Usage: tools/.venv/bin/python tools/export_weights.py models/<model-dir>/<name>.nemo
 """
 
 import hashlib

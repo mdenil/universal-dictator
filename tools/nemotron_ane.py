@@ -12,7 +12,7 @@ as float masks so one model serves full, short-final (zero-padded) and cache-fil
 Outputs: enc_proj [T, 640] (encoder output through the joint's encoder projection), and the next K/V
 caches [24, 70, 1024] and conv cache [24, 8, 1024] (fp16), fed back as the next step's inputs.
 
-Usage: reference/coreml/.venv/bin/python reference/coreml/nemotron_ane.py
+Usage: tools/.venv/bin/python tools/nemotron_ane.py
 Writes models/nemotron-speech-streaming-en-0.6b/coreml/nemotron_{160,560}_{first,steady}.mlpackage, except
 the 560 ms steady step, which is split into nemotron_560_steady_{sub,layers}.mlpackage (see convert_split).
 """

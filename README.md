@@ -23,8 +23,8 @@ The weights are downloaded into `models/` (gitignored) at the revisions pinned i
 
 ```sh
 # NeMo checkpoints -> safetensors with NeMo tensor names
-reference/nemo/.venv/bin/python reference/nemo/export_weights.py models/nemotron-speech-streaming-en-0.6b/nemotron-speech-streaming-en-0.6b.nemo
-reference/nemo/.venv/bin/python reference/nemo/export_weights.py models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b.nemo
+tools/.venv/bin/python tools/export_weights.py models/nemotron-speech-streaming-en-0.6b/nemotron-speech-streaming-en-0.6b.nemo
+tools/.venv/bin/python tools/export_weights.py models/parakeet-unified-en-0.6b/parakeet-unified-en-0.6b.nemo
 # Reduced-precision copies
 .build/release/dictate-cli convert nemotron --precision f16
 .build/release/dictate-cli convert parakeet --precision f16
@@ -35,8 +35,8 @@ reference/nemo/.venv/bin/python reference/nemo/export_weights.py models/parakeet
 
 ```sh
 # Nemotron's encoder runs on the Neural Engine by default; --backend metal uses the GPU. Build its Core ML models with
-#   reference/coreml/.venv/bin/python reference/coreml/nemotron_ane.py              (first-chunk, steady and split models)
-#   reference/coreml/.venv/bin/python reference/coreml/nemotron_ane.py --stateful   (stateful steady models, the default)
+#   tools/.venv/bin/python tools/nemotron_ane.py              (first-chunk, steady and split models)
+#   tools/.venv/bin/python tools/nemotron_ane.py --stateful   (stateful steady models, the default)
 .build/release/dictate-cli transcribe audio.wav --model nemotron --latency 160 --precision f16
 .build/release/dictate-cli transcribe audio.wav --model parakeet --horizon 4 --precision f16
 .build/release/dictate-cli voxtral audio.wav --weights dictator-q8.safetensors
@@ -48,7 +48,7 @@ reference/nemo/.venv/bin/python reference/nemo/export_weights.py models/parakeet
 Universal Dictator is a menu-bar app: click the waveform icon next to the clock, speak, then copy the text. It runs Nemotron on the Neural Engine only and links `DictatorCore` (no Metal). The plans are `plans/APP_PLAN.md` and `plans/UX_PLAN.md`; the design is in Figma ([Universal Dictator — App UI](https://www.figma.com/design/RYBeO9fxHFk9C7WMtVS6Tl)).
 
 ```sh
-# 1. The app's model folder (Core ML models from reference/coreml/nemotron_ane.py --stateful, decoder weights, tokenizer)
+# 1. The app's model folder (Core ML models from tools/nemotron_ane.py --stateful, decoder weights, tokenizer)
 swift build -c release && .build/release/dictate-cli convert app-assets          # -> build/app-assets
 # 2. Build and open the app (or open App/UniversalDictator.xcodeproj in Xcode and press Run)
 xcodebuild -project App/UniversalDictator.xcodeproj -scheme UniversalDictator -configuration Release \

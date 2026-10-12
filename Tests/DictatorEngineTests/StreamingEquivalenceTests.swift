@@ -21,7 +21,7 @@ final class StreamingEquivalenceTests: XCTestCase {
 
     func testNemotronLiveEqualsBuffered() throws {
         let dir = root.appendingPathComponent("models/nemotron-speech-streaming-en-0.6b")
-        let clip = root.appendingPathComponent("scratch/dbg/clip.wav")
+        let clip = root.appendingPathComponent("data/librispeech/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac")  // as in DictatorCoreTests
         guard FileManager.default.fileExists(atPath: clip.path), FileManager.default.fileExists(atPath: dir.path) else {
             throw XCTSkip("model or clip missing")
         }
@@ -49,7 +49,7 @@ extension StreamingEquivalenceTests {
 
     func testParakeetLiveEqualsBuffered() throws {
         let dir = root.appendingPathComponent("models/parakeet-unified-en-0.6b")
-        let clip = root.appendingPathComponent("scratch/dbg/clip.wav")
+        let clip = root.appendingPathComponent("data/librispeech/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac")  // as in DictatorCoreTests
         guard FileManager.default.fileExists(atPath: clip.path) else { throw XCTSkip("clip missing") }
         let model = try NemotronModel(modelDir: dir, kind: .parakeet, precision: "f16")
         let audio = Array(try AudioFile.readMono16k(clip).prefix(16000 * 4 + 777))
@@ -63,7 +63,7 @@ extension StreamingEquivalenceTests {
 
     func testVoxtralLiveEqualsOffline() throws {
         let dir = root.appendingPathComponent("models/Voxtral-Mini-4B-Realtime-2602")
-        let clip = root.appendingPathComponent("scratch/dbg/clip.wav")
+        let clip = root.appendingPathComponent("data/librispeech/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac")  // as in DictatorCoreTests
         guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("dictator-q8.safetensors").path) else { throw XCTSkip("q8 weights missing") }
         let model = try VoxtralModel(modelDir: dir, weights: "dictator-q8.safetensors")
         let audio = Array(try AudioFile.readMono16k(clip).prefix(16000 * 4))
