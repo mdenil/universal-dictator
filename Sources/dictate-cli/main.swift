@@ -42,7 +42,7 @@ func transcriberFactory(spec: String) throws -> () -> StreamingTranscriber {
                                  decoder: model.decoder, tokenizer: model.tokenizer, frontend: model.frontend)
             }
         }
-        return { NemotronStream(model: model, lookahead: latency / 80 - 1) }
+        return { NemotronStreamer(model: model, lookahead: latency / 80 - 1) }
     }
     if spec.hasPrefix("parakeet") {
         let model = try NemotronModel(modelDir: URL(fileURLWithPath: "models/\(NemoModelKind.parakeet.dirName)"), kind: .parakeet, precision: precision)
@@ -106,21 +106,16 @@ do {
             let stream = nemotronUsesANE(modelDir: modelDir, schedule: schedule)
                 ? NemotronStreamer(encoder: try NemotronANEEncoder(assets: ModelAssets(directory: modelDir), schedule: schedule),
                                    decoder: model.decoder, tokenizer: model.tokenizer, frontend: model.frontend)
-                : NemotronStream(model: model, lookahead: schedule.lookahead)
+                : NemotronStreamer(model: model, lookahead: schedule.lookahead)
             let mel = model.frontend.features(audio)
             // NeMo's streaming buffer treats every mel frame (including the zeroed last one) as valid.
             stream.runBuffered(mel: mel, frames: audio.count / 160 + 1, validFrames: audio.count / 160 + 1)
             text = stream.text; wallTimes = stream.wallTimes; chunkMs = stream.schedule.chunkMs
         case .parakeet:
-            if let h = option("--horizon").flatMap(Int.init) {
-                let stream = ParakeetCachedStream(model: model, horizon: h)
-                stream.runBuffered(audio: audio)
-                text = stream.text; wallTimes = stream.wallTimes; chunkMs = 160
-            } else {
-                let stream = ParakeetStream(model: model)
-                stream.runBuffered(audio: audio)
-                text = stream.text; wallTimes = stream.wallTimes; chunkMs = 160
-            }
+            let live = option("--horizon").flatMap(Int.init).map { ParakeetCachedStream(model: model, horizon: $0).live() }
+                ?? ParakeetStream(model: model).live()
+            live.run(audio)
+            text = live.transcript; wallTimes = live.stepWallTimes; chunkMs = 160
         }
         let wall = Date().timeIntervalSince(t1)
         print(text)
@@ -361,10 +356,10 @@ do {
                 let sd = sr.appendingPathComponent(d.lastPathComponent)
                 guard let refText = try? String(contentsOf: sd.appendingPathComponent("transcript.txt"), encoding: .utf8) else { continue }
                 let audio = try NPYArray.load(d.appendingPathComponent("audio.npy")).floats()
-                let st = ParakeetStream(model: model); st.runBuffered(audio: audio)
+                let st = ParakeetStream(model: model).live(); st.run(audio)
                 total += 1
                 let ref = refText.trimmingCharacters(in: .whitespacesAndNewlines)
-                if st.text == ref { exact += 1 } else { print("\(d.lastPathComponent):\n  ours: \(st.text)\n  ref:  \(ref)") }
+                if st.transcript == ref { exact += 1 } else { print("\(d.lastPathComponent):\n  ours: \(st.transcript)\n  ref:  \(ref)") }
             }
             print("L5 Parakeet exact buffered vs NeMo buffered: transcript exact \(exact)/\(total)")
             break

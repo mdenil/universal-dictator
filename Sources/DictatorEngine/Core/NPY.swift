@@ -9,6 +9,17 @@ public struct NPYArray {
 
     public var count: Int { shape.reduce(1, *) }
 
+    /// The floats of a 2-D tensor laid out time-major, [T, width]: one stored channel-first, [width, T], is
+    /// transposed.
+    public func timeMajor(width: Int) throws -> (floats: [Float], shape: [Int]) {
+        let f = try floats()
+        guard shape.count == 2 && shape[0] == width && shape[1] != width else { return (f, shape) }
+        let (W, T) = (shape[0], shape[1])
+        var tm = [Float](repeating: 0, count: W * T)
+        for w in 0..<W { for t in 0..<T { tm[t * W + w] = f[w * T + t] } }
+        return (tm, [T, W])
+    }
+
     public func floats() throws -> [Float] {
         switch dtype {
         case "<f4":

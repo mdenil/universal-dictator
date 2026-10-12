@@ -35,30 +35,11 @@ public final class SafeTensorsFile {
         }
         base = p
         mappedLength = mapLen
-        let headerLen = Int(p.loadUnaligned(as: UInt64.self))
-        let headerData = Data(bytes: p + 8, count: headerLen)
-        dataStart = 8 + headerLen
-        guard let json = try JSONSerialization.jsonObject(with: headerData) as? [String: Any] else {
-            throw EngineError.io("bad safetensors header")
+        let header = try SafeTensorsHeader(UnsafeRawBufferPointer(start: p, count: size), file: url.lastPathComponent)
+        dataStart = header.dataStart
+        entries = header.entries.compactMapValues { e in
+            DType(safetensors: e.dtype).map { Entry(dtype: $0, shape: e.shape, begin: e.begin, end: e.end) }
         }
-        var entries: [String: Entry] = [:]
-        for (k, v) in json {
-            if k == "__metadata__" { continue }
-            guard let d = v as? [String: Any], let dt = d["dtype"] as? String, let shape = d["shape"] as? [Int],
-                  let offs = d["data_offsets"] as? [Int] else { continue }
-            let dtype: DType
-            switch dt {
-            case "F32": dtype = .f32
-            case "F16": dtype = .f16
-            case "BF16": dtype = .bf16
-            case "I32": dtype = .i32
-            case "I8": dtype = .i8
-            case "U8": dtype = .u8
-            default: continue
-            }
-            entries[k] = Entry(dtype: dtype, shape: shape, begin: offs[0], end: offs[1])
-        }
-        self.entries = entries
     }
 
     deinit { munmap(base, mappedLength) }
@@ -73,13 +54,10 @@ public final class SafeTensorsFile {
 
     public func floats(_ name: String) throws -> [Float] {
         let (p, e) = try pointer(name)
-        let n = e.shape.reduce(1, *)
-        switch e.dtype {
-        case .f32: return Array(UnsafeBufferPointer(start: p.assumingMemoryBound(to: Float.self), count: n))
-        case .f16: return UnsafeBufferPointer(start: p.assumingMemoryBound(to: Float16.self), count: n).map { Float($0) }
-        case .bf16: return UnsafeBufferPointer(start: p.assumingMemoryBound(to: UInt16.self), count: n).map { Float(bitPattern: UInt32($0) << 16) }
-        default: throw EngineError.io("floats(\(name)) dtype \(e.dtype)")
+        guard let f = widenToFloats(p, dtype: e.dtype.safetensors, count: e.shape.reduce(1, *)) else {
+            throw EngineError.io("floats(\(name)) dtype \(e.dtype)")
         }
+        return f
     }
 
     /// A zero-copy GPU view of a tensor. Maps the page-aligned region around it into a Metal buffer

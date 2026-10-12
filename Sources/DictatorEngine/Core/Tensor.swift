@@ -4,6 +4,23 @@ import Metal
 public enum DType: String {
     case f32, f16, bf16, i32, i8, u8
 
+    /// The dtype's name in safetensors headers.
+    public var safetensors: String {
+        switch self {
+        case .f32: return "F32"
+        case .f16: return "F16"
+        case .bf16: return "BF16"
+        case .i32: return "I32"
+        case .i8: return "I8"
+        case .u8: return "U8"
+        }
+    }
+
+    public init?(safetensors name: String) {
+        guard let d = [DType.f32, .f16, .bf16, .i32, .i8, .u8].first(where: { $0.safetensors == name }) else { return nil }
+        self = d
+    }
+
     public var size: Int {
         switch self {
         case .f32, .i32: return 4
@@ -58,14 +75,8 @@ public final class Tensor {
     public func toFloats() -> [Float] {
         let n = count
         switch dtype {
-        case .f32:
-            return Array(UnsafeBufferPointer(start: contents.assumingMemoryBound(to: Float.self), count: n))
-        case .f16:
-            let p = contents.assumingMemoryBound(to: Float16.self)
-            return (0..<n).map { Float(p[$0]) }
-        case .bf16:
-            let p = contents.assumingMemoryBound(to: UInt16.self)
-            return (0..<n).map { Float(bitPattern: UInt32(p[$0]) << 16) }
+        case .f32, .f16, .bf16:
+            return widenToFloats(contents, dtype: dtype.safetensors, count: n)!
         case .i32:
             let p = contents.assumingMemoryBound(to: Int32.self)
             return (0..<n).map { Float(p[$0]) }

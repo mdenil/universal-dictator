@@ -18,16 +18,7 @@ public final class SafeTensorsWriter {
 
     /// Adds a tensor whose bytes are produced only when the file is written (keeps memory flat).
     public func addLazy(_ name: String, dtype: DType, shape: [Int], bytes: Int, produce: @escaping () throws -> Data) {
-        let tag: String
-        switch dtype {
-        case .f32: tag = "F32"
-        case .f16: tag = "F16"
-        case .bf16: tag = "BF16"
-        case .i32: tag = "I32"
-        case .i8: tag = "I8"
-        case .u8: tag = "U8"
-        }
-        items.append(Item(name: name, dtype: tag, shape: shape, bytes: bytes, produce: produce))
+        items.append(Item(name: name, dtype: dtype.safetensors, shape: shape, bytes: bytes, produce: produce))
     }
 
     public func write(to url: URL) throws {

@@ -13,13 +13,7 @@ public enum VoxtralLadder {
         let T = padded.count / 160
         let mel = model.frontend.frames(padded, from: 0, count: T)
         if let g = golden("mel") {
-            var ref = try g.floats(), shape = g.shape
-            if shape.count == 2 && shape[0] == 128 && shape[1] != 128 {   // [128, T] -> [T, 128]
-                let (B, N) = (shape[0], shape[1])
-                var tm = [Float](repeating: 0, count: B * N)
-                for b in 0..<B { for t in 0..<N { tm[t * B + b] = ref[b * N + t] } }
-                ref = tm; shape = [N, B]
-            }
+            let (ref, shape) = try g.timeMajor(width: 128)
             rows.append(compareTensors("L0 mel", ours: mel, ref: ref, shape: shape))
         }
 

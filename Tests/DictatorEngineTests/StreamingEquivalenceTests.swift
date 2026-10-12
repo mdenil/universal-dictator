@@ -28,9 +28,9 @@ final class StreamingEquivalenceTests: XCTestCase {
         let model = try NemotronModel(modelDir: dir, precision: "f16")
         let audio = try AudioFile.readMono16k(clip)
         for lookahead in [1, 6] {
-            let a = NemotronStream(model: model, lookahead: lookahead)
+            let a = NemotronStreamer(model: model, lookahead: lookahead)
             a.runBuffered(mel: model.frontend.features(audio), frames: audio.count / 160 + 1, validFrames: audio.count / 160 + 1)
-            let b = NemotronStream(model: model, lookahead: lookahead)
+            let b = NemotronStreamer(model: model, lookahead: lookahead)
             b.endPadding = false   // exact replay of NeMo's batch-1 schedule
             var i = 0
             while i < audio.count { let n = min(1600, audio.count - i); _ = b.push(samples: Array(audio[i..<(i + n)])); i += n }
@@ -47,17 +47,20 @@ extension StreamingEquivalenceTests {
         t.finish()
     }
 
+    /// Pushing audio in pieces gives the same tokens as the whole utterance at once (the buffered reference run).
     func testParakeetLiveEqualsBuffered() throws {
         let dir = root.appendingPathComponent("models/parakeet-unified-en-0.6b")
         let clip = root.appendingPathComponent("data/librispeech/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac")  // as in DictatorCoreTests
         guard FileManager.default.fileExists(atPath: clip.path) else { throw XCTSkip("clip missing") }
         let model = try NemotronModel(modelDir: dir, kind: .parakeet, precision: "f16")
         let audio = Array(try AudioFile.readMono16k(clip).prefix(16000 * 4 + 777))
-        let a = ParakeetStream(model: model); a.runBuffered(audio: audio)
+        let a = ParakeetStream(model: model).live(); a.run(audio)
         let b = ParakeetStream(model: model).live(); pushAll(b, audio, chunk: 1000)
+        XCTAssertFalse(a.tokens.isEmpty)
         XCTAssertEqual(a.tokens, b.tokens)
-        let c = ParakeetCachedStream(model: model, horizon: 4); c.runBuffered(audio: audio)
+        let c = ParakeetCachedStream(model: model, horizon: 4).live(); c.run(audio)
         let d = ParakeetCachedStream(model: model, horizon: 4).live(); pushAll(d, audio, chunk: 3333)
+        XCTAssertFalse(c.tokens.isEmpty)
         XCTAssertEqual(c.tokens, d.tokens)
     }
 

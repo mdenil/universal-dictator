@@ -92,8 +92,6 @@ public final class MetalNemotronEncoder: NemotronEncoder {
 }
 
 /// Nemotron streaming on the GPU: the shared streamer driven by the Metal encoder.
-public typealias NemotronStream = NemotronStreamer
-
 extension NemotronStreamer {
     /// A Metal stream for `model` with `lookahead` frames of right context (160 ms: 1, 560 ms: 6).
     public convenience init(model: NemotronModel, lookahead: Int) {

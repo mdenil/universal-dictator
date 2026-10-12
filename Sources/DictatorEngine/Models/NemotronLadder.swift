@@ -39,20 +39,13 @@ public enum NemotronLadder {
     /// per-chunk encoder output and final tokens with NeMo's official streaming run.
     public static func streamParity(model: NemotronModel, mel: [Float], frames: Int, validFrames: Int,
                                     lookahead: Int, streamDir: URL) throws -> [LadderRow] {
-        let stream = NemotronStream(model: model, lookahead: lookahead)
+        let stream = NemotronStreamer(model: model, lookahead: lookahead)
         var encRows = [Float]()
         stream.encTap = { encRows += $0 }
         stream.runBuffered(mel: mel, frames: frames, validFrames: validFrames)
         var rows = [LadderRow]()
         if let g = try? NPYArray.load(streamDir.appendingPathComponent("stream_enc_out.npy")) {
-            var ref = try g.floats()
-            var shape = g.shape
-            if shape.count == 2 && shape[0] == model.encoder.config.dModel && shape[1] != model.encoder.config.dModel {
-                let (D, T) = (shape[0], shape[1])
-                var tm = [Float](repeating: 0, count: D * T)
-                for d in 0..<D { for t in 0..<T { tm[t * D + d] = ref[d * T + t] } }
-                ref = tm; shape = [T, D]
-            }
+            let (ref, shape) = try g.timeMajor(width: model.encoder.config.dModel)
             rows.append(compareTensors("L5 stream enc_out", ours: encRows, ref: ref, shape: shape))
         }
         let refTokens = (try? NPYArray.load(streamDir.appendingPathComponent("tokens.npy")).ints()) ?? []
@@ -80,22 +73,13 @@ public enum NemotronLadder {
         if kind.perFeatureNormalize {
             fe.normalizePerFeature(&ourMel, T: ourMel.count / fe.nMels, valid: fe.validFrames(samples: audio.count))
         }
-        var refMelArr = golden("mel")!
-        var refMel = try refMelArr.floats()
-        if refMelArr.shape.count == 2 && refMelArr.shape[0] == config.melBins && refMelArr.shape[1] != config.melBins {
-            // Stored channel-first [bins, T]: transpose to time-major.
-            let (B, T) = (refMelArr.shape[0], refMelArr.shape[1])
-            var tm = [Float](repeating: 0, count: B * T)
-            for b in 0..<B { for t in 0..<T { tm[t * B + b] = refMel[b * T + t] } }
-            refMel = tm
-            refMelArr.shape = [T, B]
-        }
-        rows.append(compareTensors("L0 mel", ours: ourMel, ref: refMel, shape: refMelArr.shape))
+        let (refMel, refMelShape) = try golden("mel")!.timeMajor(width: config.melBins)
+        rows.append(compareTensors("L0 mel", ours: ourMel, ref: refMel, shape: refMelShape))
 
         // L2: encoder, fed the reference mel.
         let enc = try FastConformerEncoder(weights: weights, config: config)
         var taps: [String: Tensor] = [:]
-        let melFrames = refMelArr.shape[0]
+        let melFrames = refMelShape[0]
         let out = enc.forwardOffline(mel: refMel, melFrames: melFrames, validMel: fe.validFrames(samples: audio.count),
                                      mask: mask) { name, t in taps[name] = t }
         for name in ["pre_encode"] + (0..<config.layers).map { String(format: "layer_%02d_out", $0) } {
