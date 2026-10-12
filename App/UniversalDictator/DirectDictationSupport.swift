@@ -73,7 +73,7 @@ final class DirectSettings {
         }
     }
     /// The last of each kind, so switching kinds in Settings brings it back.
-    var lastDoubleTapKey: ModifierKey = .leftShift
+    var lastDoubleTapKey: ModifierKey = .rightShift
     var lastCombination: DictationShortcut?
     var mode: DirectMode {
         didSet { defaults.set(mode.rawValue, forKey: "directMode") }

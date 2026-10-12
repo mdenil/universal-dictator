@@ -17,8 +17,8 @@ The repository also has **`dictate-cli`**, the command-line tool the engine was 
 
 **Direct dictation** types straight into the focused text field of any app, with no window:
 
-- **Double-tap Left Shift** (the default). In Settings the shortcut can be a double tap of any modifier key (Left or Right ⇧ ⌃ ⌥ ⌘) or a key combination (⌃A, ⌘⇧D, ⇧A…); combinations that would take over ordinary typing or a standard command everywhere show a warning. When the microphone is live, the icon's bars start moving and a short sound plays. Each word is then typed at the cursor as it is recognised, as if you had typed it, so the last word is there as soon as you pause.
-- **Toggle** (default): tap Shift once to stop. **Push to talk**: Shift, Shift-hold while talking, release to stop.
+- **Double-tap Right Shift** (the default). In Settings the shortcut can be a double tap of any modifier key (Left or Right ⇧ ⌃ ⌥ ⌘) or a key combination (⌃A, ⌘⇧D, ⇧A…); combinations that would take over ordinary typing or a standard command everywhere show a warning. When the microphone is live, the icon's bars start moving and a short sound plays. Each word is then typed at the cursor as it is recognised, as if you had typed it, so the last word is there as soon as you pause.
+- **Toggle** (default): tap Right Shift once to stop. **Push to talk**: tap Right Shift, then hold it while talking and release to stop.
 - Stopping types the last word and a space. Each direct dictation goes to History, marked "typed". Clicking the icon during one stops it.
 - It needs the Accessibility permission (System Settings › Privacy & Security › Accessibility), which the app asks for once. Nothing is typed into password fields or apps using secure keyboard entry.
 

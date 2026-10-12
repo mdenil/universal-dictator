@@ -122,7 +122,7 @@ final class DoubleTapDetectorTests: XCTestCase {
     }
 
     func testShortcutDisplay() {
-        XCTAssertEqual(DictationShortcut.default.display, "Double Left ⇧")
+        XCTAssertEqual(DictationShortcut.default.display, "Double Right ⇧")
         let saved = try! JSONEncoder().encode(DictationShortcut.combination(keyCode: 2, carbonModifiers: 6144, display: "⌃⌥D"))
         XCTAssertEqual(try JSONDecoder().decode(DictationShortcut.self, from: saved).display, "⌃⌥D")
     }

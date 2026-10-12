@@ -47,7 +47,7 @@ public enum DictationShortcut: Codable, Equatable, Sendable {
     /// A key with modifiers: the virtual key code, and the modifiers as Carbon flags (cmdKey, optionKey, ...).
     case combination(keyCode: UInt32, carbonModifiers: UInt32, display: String)
 
-    public static let `default` = DictationShortcut.doubleTap(.leftShift)
+    public static let `default` = DictationShortcut.doubleTap(.rightShift)
 
     public var isDoubleTap: Bool { if case .doubleTap = self { return true }; return false }
 
