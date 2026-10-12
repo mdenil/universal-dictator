@@ -28,7 +28,7 @@ tools/.venv/bin/python tools/export_weights.py models/parakeet-unified-en-0.6b/p
 # Reduced-precision copies
 .build/release/dictate-cli convert nemotron --precision f16
 .build/release/dictate-cli convert parakeet --precision f16
-.build/release/dictate-cli convert voxtral --quant dec-ffn,dec-attn,enc,adapter --out dictator-q8.safetensors
+.build/release/dictate-cli convert voxtral                  # int8 (q8h): dictator-q8h.safetensors
 ```
 
 ## Use
@@ -37,10 +37,9 @@ tools/.venv/bin/python tools/export_weights.py models/parakeet-unified-en-0.6b/p
 # Nemotron's encoder runs on the Neural Engine by default; --backend metal uses the GPU. Build its Core ML models with
 #   tools/.venv/bin/python tools/nemotron_ane.py              (first-chunk, steady and split models)
 #   tools/.venv/bin/python tools/nemotron_ane.py --stateful   (stateful steady models, the default)
-.build/release/dictate-cli transcribe audio.wav --model nemotron --latency 160 --precision f16
-.build/release/dictate-cli transcribe audio.wav --model parakeet --horizon 4 --precision f16
-.build/release/dictate-cli voxtral audio.wav --weights dictator-q8.safetensors
-.build/release/dictate-cli stream --model nemotron-160     # live microphone
+.build/release/dictate-cli transcribe audio.wav --model nemotron-160     # or nemotron-560, parakeet, voxtral
+.build/release/dictate-cli transcribe audio.wav --model parakeet --horizon 4
+.build/release/dictate-cli stream --model nemotron-160                   # live microphone
 ```
 
 ## The Mac app
@@ -97,7 +96,7 @@ swift test                                                  # engine, core (Neur
 .build/release/dictate-cli ladder nemotron --golden-root data/golden/nemotron/offline_70_1 \
     --stream-root data/golden/nemotron/stream_70_1 --context 70,1 --precision f16
 # WER and latency: stream a manifest through a model, then score it
-.build/release/dictate-cli eval --model parakeet-h4 --manifest data/librispeech/test-other.jsonl --out artifacts/eval/run.jsonl
+.build/release/dictate-cli eval --model parakeet --horizon 4 --manifest data/librispeech/test-other.jsonl --out artifacts/eval/run.jsonl
 reference/nemo/.venv/bin/python eval/score.py artifacts/eval/run.jsonl
 reference/nemo/.venv/bin/python eval/latency.py artifacts/eval/run.jsonl data/align/test-other.jsonl
 # Your own dictation test set, recorded on this Mac's microphone

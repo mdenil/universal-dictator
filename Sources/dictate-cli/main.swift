@@ -5,36 +5,43 @@ import Foundation
 let usage = """
 usage: dictate-cli <command> [options]
 
+models (--model):
+  nemotron-160, nemotron-560   Nemotron Speech Streaming, 160 or 560 ms chunks. The encoder runs on the Neural
+                               Engine (Core ML, from tools/nemotron_ane.py); --backend metal runs it on the GPU.
+  parakeet                     Parakeet Unified, exact buffered streaming; --horizon H caches all but the newest
+                               H frames of context (faster, near-identical output).
+  voxtral                      Voxtral Mini 4B Realtime, 480 ms delay.
+  --precision f16|f32 (Nemotron, Parakeet; default f16)  --weights <file> (Voxtral; default dictator-q8h.safetensors)
+  --model-dir <dir> (default models/<checkpoint>)
+
 commands:
-  transcribe   transcribe a WAV/FLAC file with streaming inference:
-               transcribe <audio> [--model nemotron|parakeet] [--latency 160|560] [--precision f32|f16]
-               parakeet: default exact buffered (Stage A); --horizon H uses frozen-prefix caching
-               [--step-log <file>] writes each step's wall time (also for voxtral)
-               nemotron: the encoder runs on the Neural Engine (Core ML) by default; --backend metal uses the GPU
-                 (also for eval and stream).
-  voxtral      voxtral <audio> [--weights model.safetensors|dictator-q8h.safetensors] [--step-log <file>]
-  eval         live-stream a manifest to jsonl (score with eval/score.py, eval/latency.py):
-               eval --model nemotron-160|nemotron-560|parakeet|parakeet-h<H>|voxtral --manifest <jsonl> --out <jsonl>
-                    [--precision f16|f32] [--weights dictator-q8.safetensors] [--limit N]
-  stream       live microphone transcription: stream --model nemotron-160|nemotron-560|parakeet-h4|voxtral
-  record       record the dictation test set: record eval/dictation_prompts.txt [--out data/dictation]
-  dictate      the app's code path on a file: dictate <audio> [--assets build/app-assets] [--model nemotron160|nemotron560] [--pause-at S]
-  convert      write converted weights: convert nemotron|parakeet --precision f16
+  transcribe   transcribe <audio> --model M [--step-log <file>]
+               a WAV/FLAC file through the streaming transcriber; timings on stderr, --step-log writes each
+               step's wall time
+  stream       stream --model M: live microphone transcription
+  eval         eval --model M --manifest <jsonl> --out <jsonl> [--limit N]
+               live-streams each manifest line in 20 ms pieces to jsonl (score with eval/score.py, eval/latency.py)
+  record       record eval/dictation_prompts.txt [--out data/dictation]: records the dictation test set
+  dictate      dictate <audio> [--model nemotron-160|nemotron-560] [--assets build/app-assets] [--pause-at S]
+               the Mac app's code path (DictatorCore, Neural Engine) on a file
+  convert      convert nemotron|parakeet [--precision f16]: reduced-precision weights
+               convert voxtral [--quant dec-ffn,dec-attn,enc,adapter,head] [--out dictator-q8h.safetensors]: int8 weights
                convert app-assets [--out build/app-assets]: the Mac app's model folder
-  ladder       compare against golden tensors:
-               ladder nemotron --golden <utt-dir> [--context 70,1] [--model-dir models/...]
+  ladder       ladder nemotron|parakeet|voxtral --golden <utt-dir> | --golden-root <dir> [--stream-root <dir>]
+                      [--context 70,1] [--precision f32|f16] [--weights model.safetensors]
+               stage-by-stage comparison against the reference's golden tensors
 """
 
-/// Builds a transcriber factory from a model spec:
-///   nemotron[-160|-560]  parakeet (exact) | parakeet-h<H> (cached)  voxtral
-/// with --precision f32|f16 (NeMo models) and --weights <file> (Voxtral).
-func transcriberFactory(spec: String) throws -> () -> StreamingTranscriber {
+/// Loads `--model` and returns a factory for fresh transcribers on it.
+func transcriberFactory() throws -> () -> StreamingTranscriber {
+    let spec = option("--model") ?? ""
     let precision = option("--precision", "f16")!
-    if spec.hasPrefix("nemotron") {
-        let latency = spec.hasSuffix("560") ? 560 : Int(option("--latency", "160")!)!
-        let model = try NemotronModel(modelDir: URL(fileURLWithPath: "models/\(NemoModelKind.nemotron.dirName)"), kind: .nemotron, precision: precision)
-        let dir = URL(fileURLWithPath: "models/\(NemoModelKind.nemotron.dirName)")
-        let schedule = NemotronSchedule(lookahead: latency / 80 - 1)
+    func modelDir(_ name: String) -> URL { URL(fileURLWithPath: option("--model-dir", "models/\(name)")!) }
+    switch spec {
+    case "nemotron-160", "nemotron-560":
+        let dir = modelDir(NemoModelKind.nemotron.dirName)
+        let model = try NemotronModel(modelDir: dir, kind: .nemotron, precision: precision)
+        let schedule = NemotronSchedule(lookahead: spec == "nemotron-560" ? 6 : 1)
         if nemotronUsesANE(modelDir: dir, schedule: schedule) {
             let assets = ModelAssets(directory: dir)
             return {
@@ -42,21 +49,17 @@ func transcriberFactory(spec: String) throws -> () -> StreamingTranscriber {
                                  decoder: model.decoder, tokenizer: model.tokenizer, frontend: model.frontend)
             }
         }
-        return { NemotronStreamer(model: model, lookahead: latency / 80 - 1) }
-    }
-    if spec.hasPrefix("parakeet") {
-        let model = try NemotronModel(modelDir: URL(fileURLWithPath: "models/\(NemoModelKind.parakeet.dirName)"), kind: .parakeet, precision: precision)
-        if let r = spec.range(of: "-h"), let h = Int(spec[r.upperBound...]) {
-            return { ParakeetCachedStream(model: model, horizon: h).live() }
-        }
+        return { NemotronStreamer(model: model, lookahead: schedule.lookahead) }
+    case "parakeet":
+        let model = try NemotronModel(modelDir: modelDir(NemoModelKind.parakeet.dirName), kind: .parakeet, precision: precision)
+        if let h = option("--horizon").flatMap(Int.init) { return { ParakeetCachedStream(model: model, horizon: h).live() } }
         return { ParakeetStream(model: model).live() }
-    }
-    if spec == "voxtral" {
-        let model = try VoxtralModel(modelDir: URL(fileURLWithPath: "models/Voxtral-Mini-4B-Realtime-2602"),
-                                     weights: option("--weights", "dictator-q8.safetensors")!)
+    case "voxtral":
+        let model = try VoxtralModel(modelDir: modelDir("Voxtral-Mini-4B-Realtime-2602"), weights: option("--weights", "dictator-q8h.safetensors")!)
         return { VoxtralLive(model: model) }
+    default:
+        throw EngineError.io("--model: one of nemotron-160, nemotron-560, parakeet, voxtral")
     }
-    throw EngineError.io("unknown model spec \(spec)")
 }
 
 /// --step-log <path>: one step wall time (seconds) per line, for drift over long sessions.
@@ -90,65 +93,26 @@ do {
     case "transcribe":
         guard args.count > 1 else { throw EngineError.io("transcribe: missing audio path") }
         let audio = try AudioFile.readMono16k(URL(fileURLWithPath: args[1]))
-        guard let kind = NemoModelKind(rawValue: option("--model", "nemotron")!) else { throw EngineError.io("unknown --model") }
-        let modelDir = URL(fileURLWithPath: option("--model-dir", "models/\(kind.dirName)")!)
         let t0 = Date()
-        let model = try NemotronModel(modelDir: modelDir, kind: kind, precision: option("--precision", "f32")!)
+        let tr = try transcriberFactory()()
         let load = Date().timeIntervalSince(t0)
         let t1 = Date()
-        let text: String
-        var wallTimes: [Double]
-        var chunkMs: Int
-        switch kind {
-        case .nemotron:
-            let latency = Int(option("--latency", "160")!)!
-            let schedule = NemotronSchedule(lookahead: latency / 80 - 1)
-            let stream = nemotronUsesANE(modelDir: modelDir, schedule: schedule)
-                ? NemotronStreamer(encoder: try NemotronANEEncoder(assets: ModelAssets(directory: modelDir), schedule: schedule),
-                                   decoder: model.decoder, tokenizer: model.tokenizer, frontend: model.frontend)
-                : NemotronStreamer(model: model, lookahead: schedule.lookahead)
-            let mel = model.frontend.features(audio)
-            // NeMo's streaming buffer treats every mel frame (including the zeroed last one) as valid.
-            stream.runBuffered(mel: mel, frames: audio.count / 160 + 1, validFrames: audio.count / 160 + 1)
-            text = stream.text; wallTimes = stream.wallTimes; chunkMs = stream.schedule.chunkMs
-        case .parakeet:
-            let live = option("--horizon").flatMap(Int.init).map { ParakeetCachedStream(model: model, horizon: $0).live() }
-                ?? ParakeetStream(model: model).live()
-            live.run(audio)
-            text = live.transcript; wallTimes = live.stepWallTimes; chunkMs = 160
-        }
+        tr.push(audio)
+        tr.finish()
         let wall = Date().timeIntervalSince(t1)
-        print(text)
-        try writeStepLog(wallTimes)
-        let w = wallTimes.sorted()
-        FileHandle.standardError.write(String(format: "load %.2fs | %d steps of %d ms | audio %.2fs, wall %.3fs (RTF %.4f) | per-step wall p50 %.2f ms p99 %.2f ms\n",
-            load, w.count, chunkMs, Double(audio.count) / 16000, wall, wall / (Double(audio.count) / 16000),
-            w[w.count / 2] * 1000, w[min(w.count - 1, w.count * 99 / 100)] * 1000).data(using: .utf8)!)
-    case "voxtral":
-        // voxtral <audio>: offline (reference-schedule) transcription with the full-precision weights.
-        let audio = try AudioFile.readMono16k(URL(fileURLWithPath: args[1]))
-        let t0 = Date()
-        let model = try VoxtralModel(modelDir: URL(fileURLWithPath: option("--model-dir", "models/Voxtral-Mini-4B-Realtime-2602")!),
-                                     weights: option("--weights", "model.safetensors")!)
-        let load = Date().timeIntervalSince(t0)
-        let sess = VoxtralSession(model: model)
-        let t1 = Date()
-        let text = sess.transcribeOffline(audio)
-        let wall = Date().timeIntervalSince(t1)
-        print(text)
-        try writeStepLog(sess.stepTimes)
-        let st = sess.stepTimes.dropFirst().sorted()
-        FileHandle.standardError.write(String(format: "load %.2fs | prefill %.1f ms | %d steps, p50 %.1f ms p99 %.1f ms | audio %.2fs wall %.2fs | tokens %@\n",
-            load, sess.stepTimes[0] * 1000, st.count, st.isEmpty ? 0 : st[st.count / 2] * 1000, st.isEmpty ? 0 : st[st.count * 99 / 100] * 1000,
-            Double(audio.count) / 16000, wall, sess.emitted.map(String.init).joined(separator: ",")).data(using: .utf8)!)
+        print(tr.transcript)
+        try writeStepLog(tr.stepWallTimes)
+        let w = tr.stepWallTimes.sorted(), seconds = Double(audio.count) / 16000
+        FileHandle.standardError.write(String(format: "load %.2fs | %d steps | audio %.2fs, wall %.3fs (RTF %.4f) | per-step wall p50 %.2f ms p99 %.2f ms\n",
+            load, w.count, seconds, wall, wall / seconds,
+            w.isEmpty ? 0 : w[w.count / 2] * 1000, w.isEmpty ? 0 : w[min(w.count - 1, w.count * 99 / 100)] * 1000).data(using: .utf8)!)
     case "eval":
         // Transcribes every manifest line with a live streaming transcriber (audio pushed in 20 ms
         // pieces); resumable (skips done lines). Records per-step emission data for latency analysis.
-        let spec = option("--model", "nemotron")!
         let manifest = option("--manifest")!
         let outPath = option("--out")!
         let limit = Int(option("--limit", "1000000")!)!
-        let makeTranscriber = try transcriberFactory(spec: spec)
+        let makeTranscriber = try transcriberFactory()
         var done = Set<String>()
         if let existing = try? String(contentsOfFile: outPath, encoding: .utf8) {
             for line in existing.split(separator: "\n") {
@@ -199,11 +163,12 @@ do {
         }
         try out.close()
     case "dictate":
-        // dictate <audio> [--assets build/app-assets] [--model nemotron160|nemotron560] [--pause-at SECONDS]:
-        // the Mac app's code path (DictatorCore only): load, live session in 20 ms pieces, optional pause/resume.
+        // The Mac app's code path (DictatorCore only): load, live session in 20 ms pieces, optional pause/resume.
         let audio = try AudioFile.readMono16k(URL(fileURLWithPath: args[1]))
         let assets = ModelAssets(directory: URL(fileURLWithPath: option("--assets", "build/app-assets")!))
-        guard let choice = ModelChoice(rawValue: option("--model", "nemotron160")!) else { throw EngineError.io("unknown --model") }
+        guard let choice = ["nemotron-160": ModelChoice.nemotron160, "nemotron-560": .nemotron560][option("--model", "nemotron-160")!] else {
+            throw EngineError.io("dictate --model: nemotron-160 or nemotron-560")
+        }
         let pauseAt = option("--pause-at").flatMap(Double.init).map { Int($0 * 16000) }
         let sem = DispatchSemaphore(value: 0)
         var result: Result<String, Error> = .failure(EngineError.io("not run"))
@@ -260,10 +225,10 @@ do {
         guard missing.isEmpty else { throw EngineError.io("app assets incomplete: \(missing)") }
         print("wrote \(out.path): \(keep.count) decoder tensors, Core ML models for \(ModelChoice.allCases.map(\.displayName).joined(separator: ", "))")
     case "convert" where args.count > 1 && args[1] == "voxtral":
-        // convert voxtral --quant dec-ffn,dec-attn,enc,adapter,stem --out dictator-q8.safetensors
+        // The default is the shipping q8h: int8 decoder, encoder, adapter and output head (docs/DISCREPANCIES.md).
         let dir = URL(fileURLWithPath: option("--model-dir", "models/Voxtral-Mini-4B-Realtime-2602")!)
-        let groups = Set(option("--quant", "dec-ffn")!.split(separator: ",").map(String.init))
-        let dst = dir.appendingPathComponent(option("--out", "dictator-q8.safetensors")!)
+        let groups = Set(option("--quant", "dec-ffn,dec-attn,enc,adapter,head")!.split(separator: ",").map(String.init))
+        let dst = dir.appendingPathComponent(option("--out", "dictator-q8h.safetensors")!)
         let r = try WeightConverter.quantizeVoxtral(src: dir.appendingPathComponent("model.safetensors"), dst: dst, groups: groups)
         print("wrote \(dst.path): \(r.quantized) int8 tensors, \(r.bytes / (1 << 20)) MB")
     case "convert":
@@ -275,8 +240,7 @@ do {
         let r = try WeightConverter.convert(src: NemotronModel.weightsURL(modelDir: modelDir, precision: "f32"), dst: dst, precision: precision)
         print("wrote \(dst.path): \(r.tensors) tensors, \(r.bytes / (1 << 20)) MB")
     case "stream":
-        // Live microphone transcription: stream --model nemotron-160|nemotron-560|parakeet-h4|voxtral
-        let make = try transcriberFactory(spec: option("--model", "nemotron-160")!)
+        let make = try transcriberFactory()
         let tr = make()
         let q = DispatchQueue(label: "asr")
         let mic = Microphone()
@@ -320,7 +284,7 @@ do {
         }
     case "ladder" where args.count > 1 && args[1] == "voxtral":
         // ladder voxtral --golden-root data/golden/voxtral/offline [--weights model.safetensors]
-        let model = try VoxtralModel(modelDir: URL(fileURLWithPath: "models/Voxtral-Mini-4B-Realtime-2602"),
+        let model = try VoxtralModel(modelDir: URL(fileURLWithPath: option("--model-dir", "models/Voxtral-Mini-4B-Realtime-2602")!),
                                      weights: option("--weights", "model.safetensors")!)
         let root = URL(fileURLWithPath: option("--golden-root", "data/golden/voxtral/offline")!)
         let dirs = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
@@ -373,10 +337,10 @@ do {
         for d in dirs {
             let r = try NemotronLadder.run(modelDir: modelDir, goldenDir: d, kind: kind, mask: mask, precision: precision)
             var rows = r.rows
-            if let sr = streamRoot, let m = streamModel, let (mel, fr, valid) = NemotronLadder.lastMel {
+            if let sr = streamRoot, let m = streamModel, let (mel, fr, _) = NemotronLadder.lastMel {
                 let sd = sr.appendingPathComponent(d.lastPathComponent)
                 if FileManager.default.fileExists(atPath: sd.path) {
-                    let srows = try NemotronLadder.streamParity(model: m, mel: mel, frames: fr, validFrames: fr, // NeMo streaming counts every frame valid (valid=\(valid) unused)
+                    let srows = try NemotronLadder.streamParity(model: m, mel: mel, frames: fr, validFrames: fr, // NeMo streaming counts every frame valid
                                                                 lookahead: ctxParts[1], streamDir: sd)
                     rows += srows
                     streamCount += 1
