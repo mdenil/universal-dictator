@@ -14,6 +14,8 @@ files=(
 )
 status=0
 for f in "${files[@]}"; do
+  # A checkpoint you haven't downloaded (the app needs only Nemotron) is reported, not failed.
+  if [ ! -f "$f" ]; then echo "--   $f (not downloaded)"; continue; fi
   h=$(shasum -a 256 "$f" | cut -d' ' -f1)
   if [ "$1" == "--write" ]; then echo "| \`$f\` | \`$h\` |"; continue; fi
   if grep -q "$h" docs/PINS.md; then echo "ok   $f"; else echo "FAIL $f ($h)"; status=1; fi
