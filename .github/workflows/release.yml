@@ -1,0 +1,102 @@
+# Builds the Mac app for a version tag (v1.2.3, or v1.2.3-rc1 for a pre-release) and publishes it as a
+# GitHub release: UniversalDictator-<version>.dmg and its SHA-256. The plan is plans/RELEASE_BUILDS_PLAN.md.
+#
+# The app's model folder (build/app-assets) is made from nothing, as README's "Building the app" does, and
+# cached on everything that produces it, so a release that changes none of that goes straight to xcodebuild.
+# The app is signed ad hoc (App/Signing.xcconfig).
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write          # create the release
+
+jobs:
+  app:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      NEMOTRON_REPO: nvidia/nemotron-speech-streaming-en-0.6b
+      NEMOTRON_REVISION: ebe59e5a817142986528bbbee5dba8db7b38ed50      # docs/PINS.md
+      MODEL_DIR: models/nemotron-speech-streaming-en-0.6b
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version from the tag
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "::error::tag $TAG is not v<major>.<minor>.<patch>[-suffix]"; exit 1; }
+          VERSION="${TAG#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "BUNDLE_VERSION=${VERSION%%-*}" >> "$GITHUB_ENV"     # macOS wants plain numbers here
+          [[ "$VERSION" == *-* ]] && echo "PRERELEASE=--prerelease" >> "$GITHUB_ENV" || true
+
+      - name: Select Xcode 26.5
+        run: sudo xcode-select -s /Applications/Xcode_26.5.app && xcodebuild -version
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Restore the app's model folder
+        id: assets
+        uses: actions/cache@v4
+        with:
+          path: build/app-assets
+          key: app-assets-${{ hashFiles('tools/**', 'docs/PINS.md', 'Package.swift', 'Sources/DictatorCore/**', 'Sources/dictate-cli/**') }}
+
+      - name: Build the app's model folder
+        if: steps.assets.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          NEMO="$MODEL_DIR/nemotron-speech-streaming-en-0.6b.nemo"
+          uvx --from huggingface_hub hf download "$NEMOTRON_REPO" nemotron-speech-streaming-en-0.6b.nemo \
+              --revision "$NEMOTRON_REVISION" --local-dir "$MODEL_DIR"
+          scripts/verify_pins.sh
+          (cd tools && uv sync)
+          tools/.venv/bin/python tools/export_weights.py "$NEMO"
+          rm "$NEMO"                                   # disk: each intermediate goes once it has been used
+          tools/.venv/bin/python -W ignore tools/nemotron_ane.py 2>&1 | grep -v "^Running MIL"
+          swift build -c release --product dictate-cli
+          .build/release/dictate-cli convert app-assets
+          rm -rf "$MODEL_DIR" tools/.venv
+          df -h .
+
+      - name: Build the app
+        run: |
+          set -o pipefail
+          xcodebuild -project App/UniversalDictator.xcodeproj -scheme UniversalDictator -configuration Release \
+              -derivedDataPath build/DerivedData MARKETING_VERSION="$BUNDLE_VERSION" CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+              build | grep -E "error|warning: |BUILD"
+          APP=build/DerivedData/Build/Products/Release/UniversalDictator.app
+          codesign --verify --deep --strict "$APP"
+          plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist"
+          echo "APP=$APP" >> "$GITHUB_ENV"
+
+      - name: Make the DMG
+        run: |
+          set -euo pipefail
+          mkdir -p dmg/Licenses
+          ditto "$APP" "dmg/Universal Dictator.app"
+          ln -s /Applications dmg/Applications
+          cp LICENSE NOTICE docs/licenses/NVIDIA-Open-Model-License.txt dmg/Licenses/
+          DMG="UniversalDictator-$VERSION.dmg"
+          hdiutil create -volname "Universal Dictator $VERSION" -srcfolder dmg -format UDZO -ov "$DMG"
+          shasum -a 256 "$DMG" > "$DMG.sha256"
+          cat "$DMG.sha256"
+          echo "DMG=$DMG" >> "$GITHUB_ENV"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'EOF'
+          **Installing:** open the DMG and drag Universal Dictator onto Applications. The app needs an Apple-silicon Mac with macOS 15 or later.
+
+          **The first time you open it,** macOS refuses, because the app isn't notarized by Apple. Open System Settings › Privacy & Security, scroll to the message about Universal Dictator, and click **Open Anyway**. The app then asks for the microphone, and for Accessibility (used to type dictated text into other apps). After an update macOS asks for both again.
+
+          The app contains NVIDIA's Nemotron Speech Streaming model: Licensed by NVIDIA Corporation under the NVIDIA Open Model License. The license texts are in the DMG's Licenses folder and inside the app.
+          EOF
+          gh release create "$GITHUB_REF_NAME" "$DMG" "$DMG.sha256" --verify-tag \
+              --title "Universal Dictator $VERSION" --notes-file notes.md --generate-notes $PRERELEASE
