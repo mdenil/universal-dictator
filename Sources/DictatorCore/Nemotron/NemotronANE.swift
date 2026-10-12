@@ -1,10 +1,10 @@
 import CoreML
 import Foundation
 
-/// Nemotron's cache-aware streaming encoder step on the Neural Engine, through stateful Core ML models
-/// built by `tools/nemotron_ane.py --stateful`: the K/V and conv caches live in Core ML state
-/// and are updated in place. One steady-state model per latency; the 560 ms step is split into a
-/// subsampling model and a layers model (the fused graph fails the Neural Engine compile). Same schedule
+/// Nemotron's cache-aware streaming encoder step on the Neural Engine, through the Core ML package built by
+/// `tools/nemotron_ane.py`: one function per latency (the 560 ms step is split into a subsampling function and
+/// a layers function, as the fused graph fails the Neural Engine compile), sharing one copy of the weights.
+/// The K/V and conv caches live in Core ML state and are updated in place. Same schedule
 /// and masking as `FastConformerEncoder.encodeStreamStep`; a short final chunk is zero-padded to the
 /// model's rows and masked. Outputs the joint's encoder projection for the CPU RNN-T decoder.
 public final class NemotronANEEncoder: NemotronEncoder {
@@ -18,56 +18,57 @@ public final class NemotronANEEncoder: NemotronEncoder {
     var cacheLen = 0
     private(set) var steps = 0
 
-    /// Core ML file names for a latency: (subsampling model or nil, stateful model).
-    public static func modelNames(_ schedule: NemotronSchedule) -> (sub: String?, state: String) {
-        let lat = schedule.chunkMs
-        return lat == 560 ? ("nemotron_560_steady_sub", "nemotron_560_state_layers") : (nil, "nemotron_\(lat)_state")
+    /// The Core ML package's name.
+    public static let modelName = "nemotron_encoder"
+
+    /// The package's functions for a latency: (subsampling function or nil, stateful function).
+    static func functions(_ schedule: NemotronSchedule) -> (sub: String?, state: String) {
+        schedule.chunkMs == 560 ? ("accurate_sub", "accurate_layers") : (nil, "fast")
     }
 
-    /// Loads (or reuses) the Core ML models for a latency from `assets` and starts a fresh stream.
-    public init(assets: ModelAssets, schedule: NemotronSchedule, computeUnits: MLComputeUnits = .cpuAndNeuralEngine) throws {
+    /// Loads (or reuses) the functions for a latency from `assets` and starts a fresh stream.
+    public init(assets: ModelAssets, schedule: NemotronSchedule) throws {
         self.schedule = schedule
-        let names = Self.modelNames(schedule)
-        model = try Self.load(assets, names.state, computeUnits)
-        sub = try names.sub.map { try Self.load(assets, $0, computeUnits) }
+        let f = Self.functions(schedule)
+        model = try Self.load(assets, f.state)
+        sub = try f.sub.map { try Self.load(assets, $0) }
         firstRows = schedule.firstChunk
         steadyRows = schedule.preEncodeCache + schedule.chunk
         T = schedule.outFramesPerChunk
         state = model.makeState()
     }
 
-    /// Loaded models are shared by every stream (loading one compiles it for the Neural Engine).
+    /// Loaded functions, by package path and function name, are shared by every stream (loading one compiles
+    /// it for the Neural Engine).
     static var loaded: [String: MLModel] = [:]
     static let lock = NSLock()
 
-    static func load(_ assets: ModelAssets, _ name: String, _ units: MLComputeUnits) throws -> MLModel {
+    static func load(_ assets: ModelAssets, _ function: String) throws -> MLModel {
         lock.lock(); defer { lock.unlock() }
-        guard let url = try assets.compiledCoreMLModel(name) else { throw EngineError.io("Core ML model \(name) not found in \(assets.directory.path)") }
-        let key = "\(url.path)|\(units.rawValue)"
+        guard let url = try assets.compiledCoreMLModel(modelName) else {
+            throw EngineError.io("Core ML model \(modelName) not found in \(assets.directory.path)")
+        }
+        let key = "\(url.path)|\(function)"
         if let m = loaded[key] { return m }
         let cfg = MLModelConfiguration()
-        cfg.computeUnits = units
+        cfg.computeUnits = .cpuAndNeuralEngine
+        cfg.functionName = function
         let m = try MLModel(contentsOf: url, configuration: cfg)
         loaded[key] = m
         return m
     }
 
-    /// Releases every loaded model except this latency's, so only one model's weights stay in memory.
-    /// Streams already running keep theirs until they end.
+    /// Releases every loaded function except this latency's, so only one model stays in memory. Streams
+    /// already running keep theirs until they end.
     static func keepOnly(_ schedule: NemotronSchedule) {
-        let n = modelNames(schedule)
-        let keep = Set([n.sub, n.state].compactMap { $0 }.map { $0 + ".mlmodelc" })
+        let f = functions(schedule)
+        let keep = Set([f.sub, f.state].compactMap { $0 })
         lock.lock(); defer { lock.unlock() }
-        loaded = loaded.filter { key, _ in
-            keep.contains(URL(fileURLWithPath: String(key.split(separator: "|").first ?? "")).lastPathComponent)
-        }
+        loaded = loaded.filter { key, _ in keep.contains(String(key.split(separator: "|").last ?? "")) }
     }
 
-    /// Whether the Core ML models for this latency are present.
-    public static func available(assets: ModelAssets, schedule: NemotronSchedule) -> Bool {
-        let n = modelNames(schedule)
-        return assets.coreMLModel(n.state) != nil && (n.sub.map { assets.coreMLModel($0) != nil } ?? true)
-    }
+    /// Whether the Core ML package is present.
+    public static func available(assets: ModelAssets) -> Bool { assets.coreMLModel(modelName) != nil }
 
     static func nextLen(_ t: Int) -> Int { t / 2 + 1 }
 

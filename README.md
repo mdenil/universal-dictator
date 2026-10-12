@@ -34,9 +34,8 @@ tools/.venv/bin/python tools/export_weights.py models/parakeet-unified-en-0.6b/p
 ## Use
 
 ```sh
-# Nemotron's encoder runs on the Neural Engine by default; --backend metal uses the GPU. Build its Core ML models with
-#   tools/.venv/bin/python tools/nemotron_ane.py              (first-chunk, steady and split models)
-#   tools/.venv/bin/python tools/nemotron_ane.py --stateful   (stateful steady models, the default)
+# Nemotron's encoder runs on the Neural Engine by default; --backend metal uses the GPU. Build its Core ML model with
+#   tools/.venv/bin/python tools/nemotron_ane.py
 .build/release/dictate-cli transcribe audio.wav --model nemotron-160     # or nemotron-560, parakeet, voxtral
 .build/release/dictate-cli transcribe audio.wav --model parakeet --horizon 4
 .build/release/dictate-cli stream --model nemotron-160                   # live microphone
@@ -47,7 +46,7 @@ tools/.venv/bin/python tools/export_weights.py models/parakeet-unified-en-0.6b/p
 Universal Dictator is a menu-bar app: click the waveform icon next to the clock, speak, then copy the text. It runs Nemotron on the Neural Engine only and links `DictatorCore` (no Metal). The plans are `plans/APP_PLAN.md` and `plans/UX_PLAN.md`; the design is in Figma ([Universal Dictator — App UI](https://www.figma.com/design/RYBeO9fxHFk9C7WMtVS6Tl)).
 
 ```sh
-# 1. The app's model folder (Core ML models from tools/nemotron_ane.py --stateful, decoder weights, tokenizer)
+# 1. The app's model folder (the Core ML encoder from tools/nemotron_ane.py, decoder weights, tokenizer)
 swift build -c release && .build/release/dictate-cli convert app-assets          # -> build/app-assets
 # 2. Build and open the app (or open App/UniversalDictator.xcodeproj in Xcode and press Run)
 xcodebuild -project App/UniversalDictator.xcodeproj -scheme UniversalDictator -configuration Release \
@@ -74,7 +73,7 @@ Using it:
 - It needs the Accessibility permission (System Settings › Privacy & Security › Accessibility), which the app asks for once. Nothing is typed into password fields or apps using secure keyboard entry.
 - The plan is `plans/DIRECT_DICTATION_PLAN.md`.
 
-At launch the app prepares the selected model for the Neural Engine in the background: about half a minute the first time after installing or updating (Core ML then caches it per macOS version), under a second after that. Clicking meanwhile shows "Getting things ready for you…" and dictation starts by itself when it is ready. Only the chosen model is kept in memory. Switching prepares the other one the same way the first time it is used on this Mac; after that, switching takes under a second. The app asks for microphone access at launch.
+At launch the app prepares the selected model for the Neural Engine in the background: about 20 seconds the first time after installing or updating (Core ML then caches it per macOS version), under a second after that. Clicking meanwhile shows "Getting things ready for you…" and dictation starts by itself when it is ready. Only the chosen model is kept in memory. Switching prepares the other one the same way the first time it is used on this Mac; after that, switching takes under a second. The app asks for microphone access at launch.
 
 Checks without clicking through the app:
 

@@ -42,7 +42,7 @@ func transcriberFactory() throws -> () -> StreamingTranscriber {
         let dir = modelDir(NemoModelKind.nemotron.dirName)
         let model = try NemotronModel(modelDir: dir, kind: .nemotron, precision: precision)
         let schedule = NemotronSchedule(lookahead: spec == "nemotron-560" ? 6 : 1)
-        if nemotronUsesANE(modelDir: dir, schedule: schedule) {
+        if nemotronUsesANE(modelDir: dir) {
             let assets = ModelAssets(directory: dir)
             return {
                 NemotronStreamer(encoder: try! NemotronANEEncoder(assets: assets, schedule: schedule),
@@ -69,11 +69,11 @@ func writeStepLog(_ times: [Double]) throws {
 }
 
 /// Nemotron's encoder backend: the Neural Engine (Core ML) by default, Metal with --backend metal or when
-/// the Core ML models have not been built.
-func nemotronUsesANE(modelDir: URL, schedule: NemotronSchedule) -> Bool {
+/// the Core ML package has not been built.
+func nemotronUsesANE(modelDir: URL) -> Bool {
     guard option("--backend", "ane") == "ane" else { return false }
-    if NemotronANEEncoder.available(assets: ModelAssets(directory: modelDir), schedule: schedule) { return true }
-    FileHandle.standardError.write("Neural Engine models not found in \(modelDir.path)/coreml; using Metal (build them with tools/nemotron_ane.py --stateful)\n".data(using: .utf8)!)
+    if NemotronANEEncoder.available(assets: ModelAssets(directory: modelDir)) { return true }
+    FileHandle.standardError.write("Neural Engine model not found in \(modelDir.path)/coreml; using Metal (build it with tools/nemotron_ane.py)\n".data(using: .utf8)!)
     return false
 }
 
@@ -194,24 +194,20 @@ do {
         sem.wait()
         print(try result.get())
     case "convert" where args.count > 1 && args[1] == "app-assets":
-        // convert app-assets --out build/app-assets: the Mac app's model folder. Compiled stateful Core ML
-        // models for 160 and 560 ms (cloned, so no extra disk on APFS), the RNN-T decoder, joint and mel
-        // frontend weights as one small f32 file, and the tokenizer.
+        // convert app-assets --out build/app-assets: the Mac app's model folder. The compiled Core ML encoder
+        // (cloned, so no extra disk on APFS), the RNN-T decoder, joint and mel frontend weights as one small
+        // f32 file, and the tokenizer.
         let src = URL(fileURLWithPath: "models/\(NemoModelKind.nemotron.dirName)")
         let out = URL(fileURLWithPath: option("--out", "build/app-assets")!)
         let fm = FileManager.default
         if fm.fileExists(atPath: out.path) { try fm.removeItem(at: out) }
         try fm.createDirectory(at: out, withIntermediateDirectories: true)
         let assets = ModelAssets(directory: src)
-        for choice in ModelChoice.allCases {
-            let names = NemotronANEEncoder.modelNames(choice.schedule)
-            for name in [names.sub, names.state].compactMap({ $0 }) {
-                guard let compiled = try assets.compiledCoreMLModel(name) else {
-                    throw EngineError.io("\(name) not found in \(src.path)/coreml (tools/nemotron_ane.py --stateful)")
-                }
-                try fm.copyItem(at: compiled, to: out.appendingPathComponent(name + ".mlmodelc"))
-            }
+        let name = NemotronANEEncoder.modelName
+        guard let compiled = try assets.compiledCoreMLModel(name) else {
+            throw EngineError.io("\(name) not found in \(src.path)/coreml (build it with tools/nemotron_ane.py)")
         }
+        try fm.copyItem(at: compiled, to: out.appendingPathComponent(name + ".mlmodelc"))
         let w = try SafeTensorsReader(src.appendingPathComponent("nemo_extracted/weights.safetensors"))
         let keep = w.entries.keys.filter { $0.hasPrefix("decoder.") || $0.hasPrefix("joint.pred.") || $0.hasPrefix("joint.joint_net.") || $0.hasPrefix("preprocessor.featurizer.") }.sorted()
         let writer = SafeTensorsWriter()
@@ -221,7 +217,7 @@ do {
         }
         try writer.write(to: out.appendingPathComponent("nemotron-decoder.safetensors"))
         try fm.copyItem(at: src.appendingPathComponent("nemo_extracted/tokenizer.vocab"), to: out.appendingPathComponent("tokenizer.vocab"))
-        let missing = ModelChoice.allCases.flatMap { ModelAssets(directory: out).missingFiles(for: $0) }
+        let missing = ModelAssets(directory: out).missingFiles()
         guard missing.isEmpty else { throw EngineError.io("app assets incomplete: \(missing)") }
         print("wrote \(out.path): \(keep.count) decoder tensors, Core ML models for \(ModelChoice.allCases.map(\.displayName).joined(separator: ", "))")
     case "convert" where args.count > 1 && args[1] == "voxtral":

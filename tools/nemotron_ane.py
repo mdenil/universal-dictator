@@ -1,20 +1,24 @@
-"""Builds the Core ML (Neural Engine) versions of Nemotron's cache-aware streaming encoder step, for the
-Swift engine's `--backend ane`. One fixed-shape model per (latency, first/steady chunk):
+"""Builds Nemotron's cache-aware streaming encoder step for the Neural Engine: one Core ML package,
+models/nemotron-speech-streaming-en-0.6b/coreml/nemotron_encoder.mlpackage, with a function per use:
 
-  160 ms: first 9 mel rows (drop 0) / steady 25 rows = 9 pre-encode cache + 16 new (drop 2)  -> T = 2
-  560 ms: first 49 rows (drop 0)    / steady 65 rows = 9 + 56 (drop 2)                        -> T = 7
+  fast             160 ms: 25 mel rows = 9 pre-encode cache + 16 new (drop 2) -> T = 2, subsampling and layers
+  accurate_sub     560 ms: 65 rows = 9 + 56 (drop 2) -> T = 7, the subsampling only
+  accurate_layers  560 ms: the conformer layers, fed accurate_sub's output (the fused 560 ms graph fails
+                   the Neural Engine compile, while each half compiles)
 
-The masking is the engine's (FastConformer.encodeStreamStep / encodeSubsampling / encodeLayer), passed in
-as float masks so one model serves full, short-final (zero-padded) and cache-filling chunks:
+The functions share the encoder's weights, which the package stores once.
+
+`fast` and `accurate_layers` keep the K/V caches [24, 70, 1024] and the conv cache [24, 8, 1024] (fp16) as
+Core ML state, updated in place each step. The first chunk runs through the same function with leading zero
+mel rows masked at every subsampling stage, which reproduces its causal zero padding. The masking is the
+engine's (FastConformer.encodeStreamStep / encodeSubsampling / encodeLayer), passed in as float masks so one
+function serves full, short-final (zero-padded) and cache-filling chunks:
   m0..m3  valid rows of the mel input and of the three subsampling stages (1 valid, 0 masked)
   fmask   valid frames of this chunk (the GLU output is zeroed on invalid frames)
   kbias   additive key bias over [70 cached ; T new] keys (0 inside [70 - cacheLen, 70 + validT), else -1e4)
-Outputs: enc_proj [T, 640] (encoder output through the joint's encoder projection), and the next K/V
-caches [24, 70, 1024] and conv cache [24, 8, 1024] (fp16), fed back as the next step's inputs.
+Output: enc_proj [T, 640], the encoder output through the joint's encoder projection.
 
 Usage: tools/.venv/bin/python tools/nemotron_ane.py
-Writes models/nemotron-speech-streaming-en-0.6b/coreml/nemotron_{160,560}_{first,steady}.mlpackage, except
-the 560 ms steady step, which is split into nemotron_560_steady_{sub,layers}.mlpackage (see convert_split).
 """
 
 import math
@@ -25,7 +29,7 @@ import torch
 import torch.nn.functional as F
 from safetensors.torch import load_file
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 MODEL = ROOT / "models/nemotron-speech-streaming-en-0.6b"
 L, D, H, DK, K, NL, MEL = 70, 1024, 8, 128, 9, 24, 128
 
@@ -65,9 +69,6 @@ class Step(torch.nn.Module):
 
     def w(self, name):
         return getattr(self, self.names[name])
-
-    def forward(self, mel, m0, m1, m2, m3, fmask, kbias, kcache, vcache, convcache):
-        return self.layers(self.subsample(mel, m0, m1, m2, m3), fmask, kbias, kcache, vcache, convcache)
 
     def subsample(self, mel, m0, m1, m2, m3):
         mt = lambda x, m: x * m[None, None, :, None]
@@ -118,24 +119,6 @@ class Step(torch.nn.Module):
         return proj, torch.stack(newk).half(), torch.stack(newv).half(), torch.stack(newc).half()
 
 
-def convert(sd, lat, kind, rows, drop, path, nlayers=NL):
-    import coremltools as ct
-    m = Step(sd, rows, drop, nlayers).eval()
-    T, Tk = m.T, L + m.T
-    ex = (torch.zeros(rows, MEL), torch.ones(rows), torch.ones(m.T1), torch.ones(m.T2), torch.ones(m.T3), torch.ones(T),
-          torch.zeros(Tk), torch.zeros(nlayers, L, D), torch.zeros(nlayers, L, D), torch.zeros(nlayers, K - 1, D))
-    names = ["mel", "m0", "m1", "m2", "m3", "fmask", "kbias", "kcache", "vcache", "convcache"]
-    with torch.no_grad():
-        traced = torch.jit.trace(m, ex)
-    f16 = {"kcache", "vcache", "convcache"}
-    mlm = ct.convert(traced,
-                     inputs=[ct.TensorType(name=n, shape=t.shape, dtype=np.float16 if n in f16 else np.float32) for n, t in zip(names, ex)],
-                     outputs=[ct.TensorType(name="enc_proj", dtype=np.float32)] + [ct.TensorType(name=n, dtype=np.float16) for n in ["knext", "vnext", "cnext"]],
-                     convert_to="mlprogram", compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.macOS15)
-    mlm.save(str(path))
-    print(f"wrote {path} (rows {rows}, T {T}, layers {nlayers})", flush=True)
-
-
 class SubOnly(torch.nn.Module):
     def __init__(self, step):
         super().__init__(); self.s = step
@@ -144,36 +127,17 @@ class SubOnly(torch.nn.Module):
         return self.s.subsample(mel, m0, m1, m2, m3)
 
 
-class LayersOnly(torch.nn.Module):
-    def __init__(self, step):
-        super().__init__(); self.s = step
-
-    def forward(self, x, fmask, kbias, kcache, vcache, convcache):
-        return self.s.layers(x, fmask, kbias, kcache, vcache, convcache)
-
-
-def convert_split(sd, rows, drop, sub_path, layers_path):
-    """The step as two models (subsampling, then the conformer layers): the Neural Engine compiler rejects
-    the fused 560 ms steady graph (65 mel rows -> 9 subsampled frames feeding the layers), while each
-    half compiles."""
+def convert_sub(sd, rows, drop, path):
+    """The subsampling half of a step, stateless."""
     import coremltools as ct
     m = Step(sd, rows, drop).eval()
-    T = m.T
     ex = (torch.zeros(rows, MEL), torch.ones(rows), torch.ones(m.T1), torch.ones(m.T2), torch.ones(m.T3))
     with torch.no_grad():
         tr = torch.jit.trace(SubOnly(m).eval(), ex)
     ct.convert(tr, inputs=[ct.TensorType(name=n, shape=t.shape) for n, t in zip(["mel", "m0", "m1", "m2", "m3"], ex)],
                outputs=[ct.TensorType(name="x", dtype=np.float32)],
-               convert_to="mlprogram", compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.macOS15).save(str(sub_path))
-    ex = (torch.zeros(T, D), torch.ones(T), torch.zeros(L + T), torch.zeros(NL, L, D), torch.zeros(NL, L, D), torch.zeros(NL, K - 1, D))
-    names = ["x", "fmask", "kbias", "kcache", "vcache", "convcache"]
-    f16 = {"kcache", "vcache", "convcache"}
-    with torch.no_grad():
-        tr = torch.jit.trace(LayersOnly(m).eval(), ex)
-    ct.convert(tr, inputs=[ct.TensorType(name=n, shape=t.shape, dtype=np.float16 if n in f16 else np.float32) for n, t in zip(names, ex)],
-               outputs=[ct.TensorType(name="enc_proj", dtype=np.float32)] + [ct.TensorType(name=n, dtype=np.float16) for n in ["knext", "vnext", "cnext"]],
-               convert_to="mlprogram", compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.macOS15).save(str(layers_path))
-    print(f"wrote {sub_path} and {layers_path} (rows {rows}, T {T})", flush=True)
+               convert_to="mlprogram", compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.macOS15).save(str(path))
+    print(f"wrote {path} (subsampling, rows {rows}, T {m.T})", flush=True)
 
 
 class Stateful(torch.nn.Module):
@@ -223,59 +187,28 @@ def convert_stateful(sd, rows, drop, path, sub=True):
     print(f"wrote {path} (stateful, rows {rows}, T {T})", flush=True)
 
 
-SHAPES = {(160, "first"): (9, 0), (160, "steady"): (25, 2), (560, "first"): (49, 0), (560, "steady"): (65, 2)}
-SPLIT = {(560, "steady")}      # converted as two models (see convert_split)
-
-
-def convert(sd, rows, drop, path, nlayers=NL):
-    import coremltools as ct
-    m = Step(sd, rows, drop, nlayers).eval()
-    T, Tk = m.T, L + m.T
-    ex = (torch.zeros(rows, MEL), torch.ones(rows), torch.ones(m.T1), torch.ones(m.T2), torch.ones(m.T3), torch.ones(T),
-          torch.zeros(Tk), torch.zeros(nlayers, L, D), torch.zeros(nlayers, L, D), torch.zeros(nlayers, K - 1, D))
-    names = ["mel", "m0", "m1", "m2", "m3", "fmask", "kbias", "kcache", "vcache", "convcache"]
-    with torch.no_grad():
-        traced = torch.jit.trace(m, ex)
-    f16 = {"kcache", "vcache", "convcache"}
-    mlm = ct.convert(traced,
-                     inputs=[ct.TensorType(name=n, shape=t.shape, dtype=np.float16 if n in f16 else np.float32) for n, t in zip(names, ex)],
-                     outputs=[ct.TensorType(name="enc_proj", dtype=np.float32)] + [ct.TensorType(name=n, dtype=np.float16) for n in ["knext", "vnext", "cnext"]],
-                     convert_to="mlprogram", compute_precision=ct.precision.FLOAT16, minimum_deployment_target=ct.target.macOS15)
-    mlm.save(str(path))
-    print(f"wrote {path} (rows {rows}, T {T}, layers {nlayers})", flush=True)
-
-
-SHAPES = {(160, "first"): (9, 0), (160, "steady"): (25, 2), (560, "first"): (49, 0), (560, "steady"): (65, 2)}
-SPLIT = {(560, "steady")}      # converted as two models (see convert_split)
+FAST, ACCURATE = (25, 2), (65, 2)           # steady mel rows, dropped frames
 
 
 def main():
-    import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--only", help="lat,kind (e.g. 560,steady); default: all four")
-    ap.add_argument("--layers", type=int, default=NL)
-    ap.add_argument("--out", help="output .mlpackage (with --only)")
-    ap.add_argument("--stateful", action="store_true", help="build the stateful steady models (nemotron_<lat>_state*.mlpackage)")
-    a = ap.parse_args()
+    import tempfile
+    import coremltools as ct
     sd = load_file(str(MODEL / "nemo_extracted/weights.safetensors"))
     out = MODEL / "coreml"
     out.mkdir(exist_ok=True)
-    if a.stateful:
-        for lat in [160, 560]:
-            rows, drop = SHAPES[(lat, "steady")]
-            if (lat, "steady") in SPLIT:
-                # The subsampling half is the stateless nemotron_<lat>_steady_sub model.
-                convert_stateful(sd, rows, drop, out / f"nemotron_{lat}_state_layers.mlpackage", sub=False)
-            else:
-                convert_stateful(sd, rows, drop, out / f"nemotron_{lat}_state.mlpackage")
-        return
-    todo = [(int(a.only.split(",")[0]), a.only.split(",")[1])] if a.only else list(SHAPES)
-    for lat, kind in todo:
-        rows, drop = SHAPES[(lat, kind)]
-        if (lat, kind) in SPLIT and not a.out:
-            convert_split(sd, rows, drop, out / f"nemotron_{lat}_{kind}_sub.mlpackage", out / f"nemotron_{lat}_{kind}_layers.mlpackage")
-            continue
-        convert(sd, rows, drop, Path(a.out) if a.out else out / f"nemotron_{lat}_{kind}.mlpackage", a.layers)
+    with tempfile.TemporaryDirectory() as tmp:
+        parts = {"fast": Path(tmp) / "fast.mlpackage", "accurate_sub": Path(tmp) / "accurate_sub.mlpackage",
+                 "accurate_layers": Path(tmp) / "accurate_layers.mlpackage"}
+        convert_stateful(sd, *FAST, parts["fast"])
+        convert_sub(sd, *ACCURATE, parts["accurate_sub"])
+        convert_stateful(sd, *ACCURATE, parts["accurate_layers"], sub=False)
+        desc = ct.utils.MultiFunctionDescriptor()
+        for name, path in parts.items():
+            desc.add_function(str(path), src_function_name="main", target_function_name=name)
+        desc.default_function_name = "fast"
+        dst = out / "nemotron_encoder.mlpackage"
+        ct.utils.save_multifunction(desc, str(dst))
+    print(f"wrote {dst} (functions {', '.join(parts)})", flush=True)
 
 
 if __name__ == "__main__":

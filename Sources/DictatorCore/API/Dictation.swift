@@ -56,11 +56,10 @@ public struct ModelAssets: Sendable {
     var decoderWeights: URL? { existing(["nemotron-decoder.safetensors", "nemo_extracted/weights.safetensors"]) }
     var tokenizerVocab: URL? { existing(["tokenizer.vocab", "nemo_extracted/tokenizer.vocab"]) }
 
-    /// The files `choice` needs that are not here.
-    public func missingFiles(for choice: ModelChoice) -> [String] {
-        let n = NemotronANEEncoder.modelNames(choice.schedule)
+    /// The files the models need that are not here.
+    public func missingFiles() -> [String] {
         var missing = [String]()
-        for name in [n.sub, n.state].compactMap({ $0 }) where coreMLModel(name) == nil { missing.append(name + ".mlmodelc") }
+        if !NemotronANEEncoder.available(assets: self) { missing.append(NemotronANEEncoder.modelName + ".mlmodelc") }
         if decoderWeights == nil { missing.append("nemotron-decoder.safetensors") }
         if tokenizerVocab == nil { missing.append("tokenizer.vocab") }
         return missing
@@ -69,11 +68,11 @@ public struct ModelAssets: Sendable {
 
 public enum Engine {
     /// Loads a model off the calling thread: decoder weights, tokenizer, and the Core ML models, which
-    /// Core ML compiles for the Neural Engine on first use (about 40 s after an install or update, then
+    /// Core ML compiles for the Neural Engine on first use (about 20 s after an install or update, then
     /// cached). A warm-up step runs before returning, so the first dictation starts immediately.
     public static func load(_ choice: ModelChoice, assets: ModelAssets) async throws -> LoadedModel {
         try await Task.detached(priority: .userInitiated) {
-            let missing = assets.missingFiles(for: choice)
+            let missing = assets.missingFiles()
             guard missing.isEmpty else { throw EngineError.io("missing model files in \(assets.directory.path): \(missing.joined(separator: ", "))") }
             // One model in memory at a time: switching drops the other (reloading it later takes under a second
             // once its Neural Engine compile is cached on disk).

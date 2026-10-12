@@ -223,7 +223,7 @@ enum DevModes {
         let factory: StandInFactory
         var hang = false, fail = false
         func load(_ choice: ModelChoice) async throws -> SessionFactory {
-            if fail { throw EngineError.io("missing model files: nemotron_160_state.mlmodelc") }
+            if fail { throw EngineError.io("missing model files: nemotron_encoder.mlmodelc") }
             if hang { try await Task.sleep(for: .seconds(3600)) }
             return factory
         }

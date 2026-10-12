@@ -2,14 +2,14 @@ import XCTest
 import DictatorCore
 
 /// The dictation API on the Neural Engine, with no Metal in the process. Needs the Nemotron model folder
-/// (Core ML models from tools/nemotron_ane.py --stateful); skipped without it.
+/// (the Core ML encoder from tools/nemotron_ane.py); skipped without it.
 final class DictationTests: XCTestCase {
     let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     var assets: ModelAssets { ModelAssets(directory: root.appendingPathComponent("models/nemotron-speech-streaming-en-0.6b")) }
     var clip: URL { root.appendingPathComponent("data/librispeech/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac") }
 
     func load(_ choice: ModelChoice) async throws -> LoadedModel {
-        try XCTSkipUnless(assets.missingFiles(for: choice).isEmpty, "model files missing: \(assets.missingFiles(for: choice))")
+        try XCTSkipUnless(assets.missingFiles().isEmpty, "model files missing: \(assets.missingFiles())")
         try XCTSkipUnless(FileManager.default.fileExists(atPath: clip.path), "test clip missing")
         return try await Engine.load(choice, assets: assets)
     }
@@ -21,8 +21,7 @@ final class DictationTests: XCTestCase {
 
     func testMissingFilesAreReported() {
         let empty = ModelAssets(directory: FileManager.default.temporaryDirectory.appendingPathComponent("no-such-model-\(UUID())"))
-        XCTAssertEqual(Set(empty.missingFiles(for: .nemotron160)), ["nemotron_160_state.mlmodelc", "nemotron-decoder.safetensors", "tokenizer.vocab"])
-        XCTAssertTrue(empty.missingFiles(for: .nemotron560).contains("nemotron_560_steady_sub.mlmodelc"))
+        XCTAssertEqual(Set(empty.missingFiles()), ["nemotron_encoder.mlmodelc", "nemotron-decoder.safetensors", "tokenizer.vocab"])
     }
 
     /// Live push in 20 ms pieces gives the same tokens as the buffered NeMo schedule (batch-1 tail).
