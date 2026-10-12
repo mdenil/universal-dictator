@@ -1,0 +1,37 @@
+Universal Dictator
+Copyright 2026 Misha Denil
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This repository includes one file from another project:
+
+reference/voxtral/whisper_english_spelling.json
+  The English spelling map of the Whisper text normalizer, as published in normalizer.json in the Hugging
+  Face repository openai/whisper-large-v3. It comes from OpenAI Whisper's
+  whisper/normalizers/english.json (https://github.com/openai/whisper), under this license:
+
+  MIT License
+
+  Copyright (c) 2022 OpenAI
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+The model weights are not part of this repository. They are downloaded from their publishers and keep
+their own licenses: Nemotron Speech Streaming and Parakeet Unified under the NVIDIA Open Model License,
+Voxtral Mini 4B Realtime under the Apache License 2.0.

@@ -154,3 +154,19 @@ reference/nemo/.venv/bin/python eval/latency.py artifacts/eval/run.jsonl data/al
 | `scripts/` | Pin verification, a lock for heavy reference runs, the sherpa-onnx comparison |
 | `docs/` | Model specs, pins, performance log, discrepancies |
 | `plans/` | The design and the plans each stage was built from |
+
+## License
+
+Apache License 2.0 (`LICENSE`). `NOTICE` lists the one file taken from another project.
+
+## Models
+
+The weights are not part of this repository: the setup downloads them from their publishers, and they keep their own licenses.
+
+| Model | License |
+|---|---|
+| [Nemotron Speech Streaming English 0.6B](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b) | [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/) |
+| [Parakeet Unified English 0.6B](https://huggingface.co/nvidia/parakeet-unified-en-0.6b) | [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/) |
+| [Voxtral Mini 4B Realtime](https://huggingface.co/mistralai/Voxtral-Mini-4B-Realtime-2602) | Apache License 2.0 |
+
+The Mac app contains Nemotron's weights (as its Core ML encoder and decoder files), so a copy of the app you give to someone else is also covered by the NVIDIA Open Model License.
