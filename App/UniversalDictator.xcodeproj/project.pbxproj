@@ -12,6 +12,7 @@
 
 /* Begin PBXFileReference section */
 		A1D1C7A70000000000000002 /* UniversalDictator.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = UniversalDictator.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A1D1C7A70000000000000030 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -38,6 +39,7 @@
 			isa = PBXGroup;
 			children = (
 				A1D1C7A70000000000000003 /* UniversalDictator */,
+				A1D1C7A70000000000000030 /* Signing.xcconfig */,
 				A1D1C7A70000000000000006 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -198,13 +200,11 @@
 		};
 		A1D1C7A7000000000000000F /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1D1C7A70000000000000030 /* Signing.xcconfig */;
 			buildSettings = {
 				ARCHS = arm64;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = QF8GKSXVE2;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -226,13 +226,11 @@
 		};
 		A1D1C7A70000000000000011 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A1D1C7A70000000000000030 /* Signing.xcconfig */;
 			buildSettings = {
 				ARCHS = arm64;
-				CODE_SIGN_IDENTITY = "Apple Development";
-				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = QF8GKSXVE2;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				GENERATE_INFOPLIST_FILE = YES;

@@ -67,8 +67,8 @@ extension StreamingEquivalenceTests {
     func testVoxtralLiveEqualsOffline() throws {
         let dir = root.appendingPathComponent("models/Voxtral-Mini-4B-Realtime-2602")
         let clip = root.appendingPathComponent("data/librispeech/LibriSpeech/test-clean/1089/134686/1089-134686-0000.flac")  // as in DictatorCoreTests
-        guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("dictator-q8.safetensors").path) else { throw XCTSkip("q8 weights missing") }
-        let model = try VoxtralModel(modelDir: dir, weights: "dictator-q8.safetensors")
+        guard FileManager.default.fileExists(atPath: dir.appendingPathComponent("dictator-q8h.safetensors").path) else { throw XCTSkip("q8h weights missing") }
+        let model = try VoxtralModel(modelDir: dir, weights: "dictator-q8h.safetensors")
         let audio = Array(try AudioFile.readMono16k(clip).prefix(16000 * 4))
         let a = VoxtralSession(model: model); _ = a.transcribeOffline(audio)
         let b = VoxtralLive(model: model); pushAll(b, audio, chunk: 2000)

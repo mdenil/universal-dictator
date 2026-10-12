@@ -1,0 +1,14 @@
+// Code signing for the app. By default it is signed to run on this Mac only (ad hoc), which needs no Apple
+// account. An ad hoc signature changes with every build, so macOS asks for the Accessibility permission again
+// after each rebuild.
+//
+// To sign with your own Apple Development certificate instead, which keeps the permissions across rebuilds,
+// create App/Signing.local.xcconfig (gitignored) with:
+//   CODE_SIGN_IDENTITY = Apple Development
+//   DEVELOPMENT_TEAM = <your team ID>
+
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+
+#include? "Signing.local.xcconfig"
