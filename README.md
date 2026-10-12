@@ -4,6 +4,14 @@ Universal Dictator is a dictation app for Apple-silicon Macs. It lives in the me
 
 The repository also has **`dictate-cli`**, the command-line tool the engine was developed with. It runs Nemotron plus two more streaming models, Parakeet and Voxtral, with hand-written Metal kernels (see [dictate-cli](#dictate-cli) below).
 
+## Download
+
+Each release on the [Releases page](https://github.com/mdenil/universal-dictator/releases) has a DMG of the app, for Apple-silicon Macs with macOS 15 or later. Open it and drag Universal Dictator onto Applications.
+
+The app isn't notarized by Apple, so the first time you open it macOS refuses: open System Settings › Privacy & Security, scroll to the message about Universal Dictator, and click **Open Anyway**. The app then asks for the microphone, and for Accessibility, which it uses to type dictated text into other apps. Each release is a new app to macOS, so after an update it asks for both again.
+
+You can also build it yourself: see [Building the app](#building-the-app).
+
 ## Using it
 
 - **Click the icon:** the panel opens and listening starts; the icon's bars start moving. Words appear about 0.3 s after you say them; the grey word is still being recognised.
@@ -52,6 +60,14 @@ open build/DerivedData/Build/Products/Release/UniversalDictator.app
 ```
 
 The app is signed to run on this Mac only (ad hoc), which needs no Apple account. macOS then treats each rebuild as a new app and asks for the Accessibility permission again. To sign with your own Apple Development certificate instead, which keeps the permissions, see `App/Signing.xcconfig`.
+
+**Making a release:** push a version tag.
+
+```sh
+git tag -a v0.2.0 -m "Universal Dictator 0.2.0" && git push origin v0.2.0
+```
+
+GitHub Actions (`.github/workflows/release.yml`) builds the app from that tag, from nothing as above, and publishes `UniversalDictator-0.2.0.dmg` on the Releases page, in about 5 minutes. The app's version is the tag's; a tag with a suffix, such as `v0.2.0-rc1`, makes a pre-release. Nothing else triggers a build.
 
 The app links only `DictatorCore` (no Metal); its dictation logic is in `App/Kit`, and its plans are in `plans/`. The design is in Figma ([Universal Dictator — App UI](https://www.figma.com/design/RYBeO9fxHFk9C7WMtVS6Tl)).
 

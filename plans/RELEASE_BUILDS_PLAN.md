@@ -112,6 +112,8 @@ GitHub's runner is an M1 with 3 cores, so I'd expect the compute steps to take 2
 
 So about **12 minutes** for a cold build, and about **6** when the model folder comes from the cache. The first real run will show the actual figure.
 
+**Measured:** the trial release `v0.1.0-rc1` took 5 min 17 s from cold, on its first run: model folder 2 min 44 s, app 33 s, DMG 54 s, publishing 42 s. The runner was faster than I estimated.
+
 **Cost:**
 - **Private repository:** the free plan includes 2,000 Actions minutes a month. macOS minutes count ten times, so that is about 200 macOS minutes, roughly 15 releases a month. Beyond that, macOS time costs $0.062 a minute (about 75¢ a release).
 - **Public repository:** free.
