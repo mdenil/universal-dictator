@@ -41,7 +41,7 @@ The audit covered every tracked file, the git history and the built app. Your de
 
 - **The move:** `PLAN.md`, `APP_PLAN.md`, `UX_PLAN.md`, `DIRECT_DICTATION_PLAN.md`, `ROUND3_PLAN.md` and this plan go into `plans/` with `git mv`, so their history follows them.
 - **Links updated:** seven references in README, APP_PLAN, PLAN, `docs/specs/nemotron.md` and `Convert.swift` (that one already points at a wrong path, `docs/PLAN.md`).
-- **The plans' content stays as written.** They record what was decided at the time, so for example UX_PLAN still says the icon turns red. There is one exception: the headset note in DIRECT_DICTATION_PLAN says to rerun `--button-probe`, which is removed in 3. It will say where the probe lives in the history: `git show 1351991:App/UniversalDictator/ButtonProbe.swift`.
+- **The plans' content stays as written.** They record what was decided at the time, so for example UX_PLAN still says the icon turns red. There is one exception: the headset note in DIRECT_DICTATION_PLAN says to rerun `--button-probe`, which is removed in 3. It will say where the probe lives in the history: `git show d4c5367:App/UniversalDictator/ButtonProbe.swift`.
 
 ## 2. Engine and CLI: remove what neither product uses
 

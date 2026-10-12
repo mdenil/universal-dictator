@@ -1,6 +1,6 @@
 # Universal Dictator: UX changes, round 2
 
-This plan covers seven pieces of feedback on the app as it runs today (commit `fc403d3`), revised after your first review. Each section says what changes, how it will be built and how it will be tested.
+This plan covers seven pieces of feedback on the app as it runs today (commit `1c84c47`), revised after your first review. Each section says what changes, how it will be built and how it will be tested.
 
 The designs are in Figma: [Universal Dictator — App UI](https://www.figma.com/design/RYBeO9fxHFk9C7WMtVS6Tl).
 - **"Settings (draft)"**: the right-click menu, the Settings window, and the Settings window while a dictation is paused.

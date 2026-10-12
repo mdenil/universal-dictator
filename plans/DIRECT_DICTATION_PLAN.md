@@ -113,7 +113,7 @@ The app is signed with the Apple Development certificate (team QF8GKSXVE2), so m
 - **Microphone off:** each press reaches the app only as a media command (play, pause; a double press is "next track"). macOS sends these to the app that is "now playing", so to receive them the app would have to stay the now-playing app all the time, and show in Control Center's Now Playing. That is not acceptable. No media-key event reaches an event tap.
 - **Microphone on** (the headset in its call mode): a press reaches the app by no route at all, so the button can't stop a dictation.
 
-**What would make it worth building:** a way to receive the button press while the microphone is off without being the now-playing app (for example a headset whose button arrives as an ordinary key or HID event). The probe was removed in the release cleanup; to check another headset or a new macOS, restore it from commit 1351991 (`App/UniversalDictator/ButtonProbe.swift` and its `--button-probe` line in `DevModes.swift`).
+**What would make it worth building:** a way to receive the button press while the microphone is off without being the now-playing app (for example a headset whose button arrives as an ordinary key or HID event). The probe was removed in the release cleanup; to check another headset or a new macOS, restore it from commit d4c5367 (`App/UniversalDictator/ButtonProbe.swift` and its `--button-probe` line in `DevModes.swift`).
 
 ## Order of work
 
