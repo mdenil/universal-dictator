@@ -182,7 +182,7 @@ The formulas are: `lookahead = R`; `chunk_size = [1 + 8R, 8 + 8R]`; `valid_out_l
 
 Initial state (`get_initial_cache_state`, `conformer_encoder.py:1034-1072`): all zeros.
 
-- `cache_last_channel` [24, B, 70, 1024]: per layer, the last 70 rows of the **attention input `LN_att(r)`**, i.e. the normalized hidden states, not K or V. In `update_cache` (`mha.py:204-209`): `key = value = cat([cache, z])` (70 + t rows), and `next_cache = cat([cache[:, t:], z[:, :t]])[-70:]` (since `cache_drop_size = 0`, `q_keep_size = t`). K and V are recomputed from the cached rows every step. (Caching projected K/V instead, as PLAN.md M2 proposes, is equivalent.)
+- `cache_last_channel` [24, B, 70, 1024]: per layer, the last 70 rows of the **attention input `LN_att(r)`**, i.e. the normalized hidden states, not K or V. In `update_cache` (`mha.py:204-209`): `key = value = cat([cache, z])` (70 + t rows), and `next_cache = cat([cache[:, t:], z[:, :t]])[-70:]` (since `cache_drop_size = 0`, `q_keep_size = t`). K and V are recomputed from the cached rows every step. (Caching projected K/V instead, as `plans/PLAN.md` M2 proposes, is equivalent.)
 - `cache_last_time` [24, B, 1024, 8]: per layer, the last 8 time steps of the **depthwise-conv input**, i.e. the GLU output after the pad-mask fill (`causal_convs.py:130-142`): `new_x = cat([cache, x])`, `next_cache = new_x[:, :, -8:]`.
 - `cache_last_channel_len` [B]: `min(prev_len + t_kept, 70)` (`conformer_encoder.py:645-647, 756`).
 

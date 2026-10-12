@@ -8,7 +8,7 @@ Universal Dictator is a local streaming speech-to-text engine for Apple-silicon 
 | Parakeet Unified English 0.6B | chunked attention: exact buffered mode, or our frozen-prefix caching | 560 ms (160 ms chunk + 400 ms lookahead) |
 | Voxtral Mini 4B Realtime | causal encoder + LLM decoder, one token per 80 ms | 480 ms delay |
 
-`PLAN.md` describes the design and milestones. The measurement rules are in `PLAN.md` (methodology section), and results go in `docs/PERF_LOG.md` and `docs/DISCREPANCIES.md`.
+`plans/PLAN.md` describes the design and milestones. The measurement rules are in `plans/PLAN.md` (methodology section), and results go in `docs/PERF_LOG.md` and `docs/DISCREPANCIES.md`.
 
 ## Build
 
@@ -45,7 +45,7 @@ reference/nemo/.venv/bin/python reference/nemo/export_weights.py models/parakeet
 
 ## The Mac app
 
-Universal Dictator is a menu-bar app: click the waveform icon next to the clock, speak, then copy the text. It runs Nemotron on the Neural Engine only and links `DictatorCore` (no Metal). The plans are `APP_PLAN.md` and `UX_PLAN.md`; the design is in Figma ([Universal Dictator — App UI](https://www.figma.com/design/RYBeO9fxHFk9C7WMtVS6Tl)).
+Universal Dictator is a menu-bar app: click the waveform icon next to the clock, speak, then copy the text. It runs Nemotron on the Neural Engine only and links `DictatorCore` (no Metal). The plans are `plans/APP_PLAN.md` and `plans/UX_PLAN.md`; the design is in Figma ([Universal Dictator — App UI](https://www.figma.com/design/RYBeO9fxHFk9C7WMtVS6Tl)).
 
 ```sh
 # 1. The app's model folder (Core ML models from reference/coreml/nemotron_ane.py --stateful, decoder weights, tokenizer)
@@ -73,7 +73,7 @@ Using it:
 - **Toggle** (default): tap Shift once to stop. **Push to talk**: Shift, Shift-hold while talking, release to stop.
 - Stopping types the last word and a space. Each direct dictation goes to History, marked "typed". Clicking the icon during one stops it.
 - It needs the Accessibility permission (System Settings › Privacy & Security › Accessibility), which the app asks for once. Nothing is typed into password fields or apps using secure keyboard entry.
-- The plan is `DIRECT_DICTATION_PLAN.md`.
+- The plan is `plans/DIRECT_DICTATION_PLAN.md`.
 
 At launch the app prepares the selected model for the Neural Engine in the background: about half a minute the first time after installing or updating (Core ML then caches it per macOS version), under a second after that. Clicking meanwhile shows "Getting things ready for you…" and dictation starts by itself when it is ready. Only the chosen model is kept in memory. Switching prepares the other one the same way the first time it is used on this Mac; after that, switching takes under a second. The app asks for microphone access at launch.
 

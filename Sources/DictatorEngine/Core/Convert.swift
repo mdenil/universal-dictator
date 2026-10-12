@@ -122,7 +122,7 @@ public enum WeightConverter {
 }
 
 extension WeightConverter {
-    /// Voxtral int8 conversion by stage (docs/PLAN.md M4): `groups` picks which weight families become
+    /// Voxtral int8 conversion by stage (plans/PLAN.md M4): `groups` picks which weight families become
     /// per-row int8 (+ "<name>.qscale" f32); everything else is copied unchanged (bf16).
     ///   dec-ffn: decoder mlp gate/up/down   dec-attn: decoder q/k/v/o   enc: encoder layer linears
     ///   adapter: multi_modal_projector      stem: conv1/conv2
