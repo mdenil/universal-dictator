@@ -35,3 +35,7 @@ reference/voxtral/whisper_english_spelling.json
 The model weights are not part of this repository. They are downloaded from their publishers and keep
 their own licenses: Nemotron Speech Streaming and Parakeet Unified under the NVIDIA Open Model License,
 Voxtral Mini 4B Realtime under the Apache License 2.0.
+
+The Universal Dictator app contains Nemotron Speech Streaming English 0.6B, converted for the Neural Engine:
+Licensed by NVIDIA Corporation under the NVIDIA Open Model License
+The agreement is in NVIDIA-Open-Model-License.txt (docs/licenses/ in the repository, Licenses/ in the app).

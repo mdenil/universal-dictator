@@ -141,10 +141,12 @@
 			outputFileListPaths = (
 			);
 			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/NemotronAssets",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/Licenses",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Copies the Nemotron model folder (Core ML models, decoder weights, tokenizer) into the app as\n# Contents/Resources/NemotronAssets. Build it first with: dictate-cli convert app-assets\n# APFS clones (cp -c) make the 2.2 GB copy instant and take no extra disk.\nset -e\nSRC=\"$PROJECT_DIR/../build/app-assets\"\nDST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/NemotronAssets\"\nif [ ! -f \"$SRC/tokenizer.vocab\" ]; then\n  echo \"error: model assets not found in $SRC. Run: swift build -c release && .build/release/dictate-cli convert app-assets\"\n  exit 1\nfi\nrm -rf \"$DST\"\nmkdir -p \"$(dirname \"$DST\")\"\ncp -cR \"$SRC\" \"$DST\" 2>/dev/null || cp -R \"$SRC\" \"$DST\"\n";
+			shellScript = "# Copies the Nemotron model folder (Core ML encoder, decoder weights, tokenizer) into the app as\n# Contents/Resources/NemotronAssets, and the licenses that come with it into Contents/Resources/Licenses.\n# Build the model folder first with: dictate-cli convert app-assets\n# APFS clones (cp -c) make the 1.2 GB copy instant and take no extra disk.\nset -e\nLIC=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/Licenses\"\nrm -rf \"$LIC\"\nmkdir -p \"$LIC\"\ncp \"$PROJECT_DIR/../LICENSE\" \"$PROJECT_DIR/../NOTICE\" \"$PROJECT_DIR/../docs/licenses/NVIDIA-Open-Model-License.txt\" \"$LIC/\"\nSRC=\"$PROJECT_DIR/../build/app-assets\"\nDST=\"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/NemotronAssets\"\nif [ ! -f \"$SRC/tokenizer.vocab\" ]; then\n  echo \"error: model assets not found in $SRC. Run: swift build -c release && .build/release/dictate-cli convert app-assets\"\n  exit 1\nfi\nrm -rf \"$DST\"\nmkdir -p \"$(dirname \"$DST\")\"\ncp -cR \"$SRC\" \"$DST\" 2>/dev/null || cp -R \"$SRC\" \"$DST\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
