@@ -7,9 +7,9 @@ import Foundation
 public final class RNNTDecoder {
     public let hidden: Int          // prediction net / joint hidden size (640)
     public let vocab: Int           // number of outputs including blank (1025)
-    public let blank: Int
+    let blank: Int
     public let layers: Int
-    public let maxSymbolsPerFrame: Int
+    let maxSymbolsPerFrame: Int
 
     let embed: [Float]              // [vocab, hidden]; blank row is the padding row
     let wIH: [[Float]], wHH: [[Float]], bias: [[Float]]   // per layer: [4H, H], [4H, H], b_ih + b_hh
@@ -124,8 +124,7 @@ public final class RNNTDecoder {
 
     /// Greedy RNN-T over `frames` projected encoder frames ([frames, hidden], row-major).
     /// Appends emitted token ids to `tokens`; `state` carries across calls (chunks).
-    public func greedy(encProj: [Float], frames: Int, state: inout State, tokens: inout [Int],
-                       logitsSink: ((Int, [Float]) -> Void)? = nil) {
+    public func greedy(encProj: [Float], frames: Int, state: inout State, tokens: inout [Int]) {
         encProj.withUnsafeBufferPointer { ep in
             for t in 0..<frames {
                 var emitted = 0
@@ -139,7 +138,6 @@ public final class RNNTDecoder {
                     var best = 0
                     var bestV = logits[0]
                     for k in 1..<logits.count where logits[k] > bestV { bestV = logits[k]; best = k }
-                    logitsSink?(t, logits)
                     if best == blank { break }
                     tokens.append(best)
                     emitted += 1

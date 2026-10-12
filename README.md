@@ -85,9 +85,7 @@ $APP --selftest /path/to/audio.flac --model nemotron160    # the app's controlle
                                                             # reopens the panel, edits the paused text and resumes
 $APP --snapshot /tmp/panel-states                          # renders every panel state, Settings and History to PNG
 $APP --measure-switch                                      # model load and switch times, and memory
-$APP --typing-test                                         # types into a test window by each route, with keys held (needs Accessibility)
 $APP --direct-selftest /path/to/audio.flac                  # direct dictation into a test window; PASS if it holds the final text
-$APP --diagnose-start                                      # opens the panel twice for real: start timing, icon position
 .build/release/dictate-cli dictate audio.flac --pause-at 5  # the same code path from the CLI
 swift test                                                  # engine, core (Neural Engine) and app-logic tests
 ```

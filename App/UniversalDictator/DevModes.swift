@@ -14,15 +14,9 @@ import UniversalDictatorKit
 //       the Neural Engine compile already cached on disk.
 //   UniversalDictator --check-accessibility
 //       prints whether this app may type into other apps, and exits.
-//   UniversalDictator --typing-test
-//       types into a test window of its own by each route (HID tap, session tap, the front app), with no key
-//       held, with Shift held and with ⌃⌥ held (simulated for under half a second), and prints what arrived.
-//       Needs Accessibility. Takes the keyboard focus for a few seconds.
 //   UniversalDictator --direct-selftest <audio> [--model nemotron160|nemotron560]
 //       direct dictation of <audio> into a test window of its own, through the real model and real typing;
 //       prints PASS if the window holds exactly the dictation's final text and a space. Needs Accessibility.
-//   UniversalDictator --button-probe
-//       reports what a headset button press arrives as, with the microphone off and on (see ButtonProbe), and exits.
 //   UniversalDictator --snapshot <dir>
 //       renders the panel in each state to <dir>/<state>.png with stand-in sessions and exits.
 enum DevModes {
@@ -43,10 +37,6 @@ enum DevModes {
             print(AXIsProcessTrusted() ? "allowed" : "not allowed")
             exit(0)
         }
-        if CommandLine.arguments.contains("--typing-test") {
-            Task { await typingTest(); exit(0) }
-            return true
-        }
         if let audio = argument(after: "--direct-selftest") {
             let choice = argument(after: "--model").flatMap(ModelChoice.init(rawValue:)) ?? .nemotron160
             Task { await directSelftest(audio: URL(fileURLWithPath: audio), choice: choice, assets: assets); exit(0) }
@@ -54,10 +44,6 @@ enum DevModes {
         }
         if CommandLine.arguments.contains("--measure-switch") {
             Task { await measureSwitch(assets: assets); exit(0) }
-            return true
-        }
-        if CommandLine.arguments.contains("--button-probe") {
-            ButtonProbe.run()
             return true
         }
         if let dir = argument(after: "--snapshot") {
@@ -146,44 +132,6 @@ enum DevModes {
         return (w, tv)
     }
 
-    /// Simulates holding (or releasing) modifier keys, as the keyboard would.
-    static func hold(_ keys: [(UInt16, CGEventFlags)], down: Bool) {
-        let src = CGEventSource(stateID: .hidSystemState)
-        var flags: CGEventFlags = []
-        for (code, flag) in (down ? keys : keys.reversed()) {
-            if down { flags.insert(flag) } else { flags.remove(flag) }
-            guard let e = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: down) else { continue }
-            e.type = .flagsChanged
-            e.flags = flags
-            e.post(tap: .cghidEventTap)
-        }
-    }
-
-    @MainActor static func typingTest() async {
-        func log(_ s: String) { FileHandle.standardError.write((s + "\n").data(using: .utf8)!) }
-        guard AXIsProcessTrusted() else { log("Accessibility is not allowed for this app; nothing typed"); return }
-        let (w, tv) = focusedTextWindow()
-        try? await Task.sleep(for: .milliseconds(500))
-        let sample = "Hi there, abc s q."
-        let holds: [(String, [(UInt16, CGEventFlags)])] = [("nothing held", []), ("Shift held", [(56, .maskShift)]),
-                                                           ("⌃⌥ held", [(59, .maskControl), (58, .maskAlternate)])]
-        for route in KeyboardTyper.Route.allCases {
-            for (label, keys) in holds {
-                tv.string = ""
-                hold(keys, down: true)
-                try? await Task.sleep(for: .milliseconds(60))
-                let seen = NSEvent.modifierFlags.intersection([.shift, .control, .option]).rawValue
-                KeyboardTyper.post(sample, route: route)
-                try? await Task.sleep(for: .milliseconds(300))
-                hold(keys, down: false)
-                try? await Task.sleep(for: .milliseconds(150))
-                let got = tv.string
-                log("\(route.rawValue), \(label) (modifiers seen \(seen)): \(got == sample ? "OK" : "DIFFERENT") \"\(got)\"")
-            }
-        }
-        w.orderOut(nil)
-    }
-
     @MainActor static func directSelftest(audio url: URL, choice: ModelChoice, assets: ModelAssets) async {
         func log(_ s: String) { FileHandle.standardError.write((s + "\n").data(using: .utf8)!) }
         guard AXIsProcessTrusted() else { log("Accessibility is not allowed for this app; nothing typed"); return }
@@ -262,7 +210,7 @@ enum DevModes {
         func replaceText(_ text: String) { said = text }
         func resume() {}
         func stop() async -> String { cont.finish(); return final }
-        func say(_ c: String, _ p: String) { said = c + p; cont.yield(TranscriptUpdate(committed: c, partial: p, isPaused: false, isFinished: false)) }
+        func say(_ c: String, _ p: String) { said = c + p; cont.yield(TranscriptUpdate(committed: c, partial: p, isFinished: false)) }
     }
     final class StandInFactory: SessionFactory, @unchecked Sendable {
         var last: StandInSession?

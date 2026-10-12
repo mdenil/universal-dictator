@@ -346,10 +346,8 @@ public final class DictationController {
         microphoneGeneration += 1
         let generation = microphoneGeneration
         let firstAudio = OnceFlag()
-        let onset = OnsetProbe(start: t0)
         let onSamples: ([Float]) -> Void = { [weak self] samples in
             s.push(samples)
-            onset.add(samples)
             // Live at the first real sound: a Bluetooth headset sends digital silence (exact zeros) for up to a
             // few hundred milliseconds while its microphone link comes up, and words said then are lost.
             if samples.contains(where: { $0 != 0 }), firstAudio.claim() {
@@ -620,43 +618,5 @@ final class OnceFlag: @unchecked Sendable {
         if done { return false }
         done = true
         return true
-    }
-}
-
-/// Logs how a capture begins, for the "first words lost" question: when the first non-zero sample arrives
-/// (a Bluetooth headset can send digital silence while its microphone link comes up), and the peak level of
-/// each 100 ms for the first 1.5 s.
-final class OnsetProbe: @unchecked Sendable {
-    let start: Date
-    let lock = NSLock()
-    var samples = 0
-    var sawNonZero = false
-    var windowPeak: Float = 0
-    var windowCount = 0
-    var peaks: [String] = []
-    var done = false
-
-    init(start: Date) { self.start = start }
-
-    func add(_ x: [Float]) {
-        lock.lock(); defer { lock.unlock() }
-        guard !done else { return }
-        if !sawNonZero, let i = x.firstIndex(where: { $0 != 0 }) {
-            sawNonZero = true
-            timing.notice("capture onset: first non-zero sample \(Int(Date().timeIntervalSince(self.start) * 1000)) ms after start, \(self.samples + i) samples into the audio")
-        }
-        for v in x {
-            windowPeak = max(windowPeak, abs(v))
-            windowCount += 1
-            if windowCount == 1600 {                                       // 100 ms at 16 kHz
-                peaks.append(windowPeak == 0 ? "0" : String(format: "%.0f", 20 * log10(windowPeak)))
-                windowPeak = 0; windowCount = 0
-            }
-        }
-        samples += x.count
-        if samples >= 24000 {
-            done = true
-            timing.notice("capture onset: peak dB per 100 ms from the first audio: \(self.peaks.joined(separator: " "), privacy: .public)")
-        }
     }
 }

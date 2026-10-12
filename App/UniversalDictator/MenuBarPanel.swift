@@ -36,18 +36,6 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         }
         item.button?.toolTip = "Universal Dictator"
         updateIcon()
-        // When the icon is hidden or shown (for example pushed behind the notch), log where it is and which
-        // app is in front, to find out why it disappears while dictating.
-        if let w = item.button?.window {
-            occlusionObserver = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: w,
-                                                                       queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    let front = NSWorkspace.shared.frontmostApplication?.localizedName ?? "?"
-                    log.notice("icon changed: \(self.describeIcon(), privacy: .public); phase \(String(describing: self.controller.phase), privacy: .public); front app \(front, privacy: .public)")
-                }
-            }
-        }
     }
 
     /// When the panel last closed: clicking the menu-bar item while the panel is open first takes focus
@@ -55,7 +43,6 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
     var lastClose = Date.distantPast
 
     var rightClickMonitor: Any?
-    var occlusionObserver: Any?
 
     /// Left click toggles the panel; Control-click shows the app menu with Quit (right click: see the monitor).
     @objc func clicked() {
@@ -234,26 +221,6 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         return NSRect(x: x, y: iconFrame.minY - size.height - 6, width: size.width, height: size.height)
     }
 
-    /// For diagnosing placement without showing anything: the icon, screen and panel frames.
-    func describeGeometry() -> String {
-        let button = item.button
-        let iconFrame = button?.window.map { $0.convertToScreen(button!.convert(button!.bounds, to: nil)) }
-        return "icon \(String(describing: iconFrame)), screen \(String(describing: button?.window?.screen?.visibleFrame)), " +
-            "content fitting \(String(describing: host.fittingSize)), panel \(String(describing: panelFrame()))"
-    }
-
-    /// For diagnosing a hidden icon: where the status item's window is, and whether any of it is on screen.
-    func describeIcon() -> String {
-        guard let w = item.button?.window else { return "icon: no window" }
-        let screen = w.screen ?? NSScreen.main
-        let notch = screen.map { s -> String in
-            let l = s.auxiliaryTopLeftArea?.maxX ?? 0, r = s.auxiliaryTopRightArea?.minX ?? 0
-            return "notch x \(Int(l))–\(Int(r))"
-        } ?? "no screen"
-        return "icon frame x \(Int(w.frame.minX))–\(Int(w.frame.maxX)) y \(Int(w.frame.minY)), visible \(w.isVisible), " +
-            "occlusion-visible \(w.occlusionState.contains(.visible)), animating \(animation != nil), \(notch)"
-    }
-
     func open(startDictation: Bool = true) {
         guard let frame = panelFrame(), frame.width > 0, frame.height > 0 else { log.error("open: no usable frame"); return }
         let t0 = Date()
@@ -330,7 +297,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
             let live = controller.isMicrophoneLive
             if live, !wasLive, controller.isDirectDictating {                          // no window to look at
                 let played = StartSound.play()
-                log.notice("direct dictation live: sound \(played ? "played" : "failed", privacy: .public) on \(StartSound.outputDescription(), privacy: .public)")
+                log.notice("direct dictation live: sound \(played ? "played" : "failed", privacy: .public)")
             }
             wasLive = live
             switch controller.directDictationFailed ? .microphoneDenied : controller.isDirectDictating ? .listening : controller.phase {

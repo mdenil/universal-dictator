@@ -49,62 +49,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeys.onDown = { [weak self] in self?.menuBar.shortcutDown() }
         hotkeys.onUp = { [weak self] in self?.menuBar.shortcutUp() }
         hotkeys.onTap = { [weak self] in self?.menuBar.shortcutTap() ?? false }
-        if CommandLine.arguments.contains("--diagnose-start") {
-            // Twice: open the panel and start a real dictation, time it, report the icon's position and whether
-            // it is on screen while listening, close. The microphone runs for about three seconds each time.
-            let tLoad = Date()
-            controller.loadModel()
-            Task { @MainActor in
-                while self.controller.phase == .preparing { try? await Task.sleep(for: .milliseconds(100)) }
-                FileHandle.standardError.write("model ready after \(Int(Date().timeIntervalSince(tLoad) * 1000)) ms\n".data(using: .utf8)!)
-                try? await Task.sleep(for: .seconds(2))
-                for round in 1...2 {
-                    let t0 = Date()
-                    self.menuBar.open()
-                    FileHandle.standardError.write("round \(round) before open: \(self.menuBar.describeIcon())\n".data(using: .utf8)!)
-                    while self.controller.phase != .listening { try? await Task.sleep(for: .milliseconds(5)) }
-                    FileHandle.standardError.write("round \(round): open -> listening \(Int(Date().timeIntervalSince(t0) * 1000)) ms\n".data(using: .utf8)!)
-                    // The microphone indicator appears a moment after the microphone starts. In round 1 the
-                    // microphone also goes through its format-change restart halfway (as when a headset switches
-                    // mode); the log shows whether audio kept arriving.
-                    for i in 1...6 {
-                        if round == 1, i == 3 {
-                            microphone.restartForDiagnosis()
-                            FileHandle.standardError.write("round 1: forced a microphone restart\n".data(using: .utf8)!)
-                        }
-                        try? await Task.sleep(for: .milliseconds(500))
-                        FileHandle.standardError.write("round \(round) listening +\(i * 500) ms: audio blocks \(microphone.blocksDelivered); \(self.menuBar.describeIcon())\n".data(using: .utf8)!)
-                    }
-                    self.menuBar.close()
-                    try? await Task.sleep(for: .milliseconds(800))
-                }
-                exit(0)
-            }
-            return
-        }
-        if CommandLine.arguments.contains("--diagnose-open") {
-            // Shows the panel for a second without starting a dictation, and reports the app's on-screen windows.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                self.menuBar.open(startDictation: false)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                    let pid = ProcessInfo.processInfo.processIdentifier
-                    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
-                    for w in list where (w[kCGWindowOwnerPID as String] as? Int32) == pid {
-                        FileHandle.standardError.write("on screen: layer \(w[kCGWindowLayer as String] ?? "?") bounds \(w[kCGWindowBounds as String] ?? "?")\n".data(using: .utf8)!)
-                    }
-                    FileHandle.standardError.write("panel visible \(self.menuBar.panel.isVisible) key \(self.menuBar.panel.isKeyWindow) frame \(self.menuBar.panel.frame) mic phase \(self.controller.phase)\n".data(using: .utf8)!)
-                    exit(0)
-                }
-            }
-            return
-        }
-        if CommandLine.arguments.contains("--diagnose-panel") {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                FileHandle.standardError.write((self.menuBar.describeGeometry() + "\n").data(using: .utf8)!)
-                exit(0)
-            }
-            return
-        }
         // Load at launch so a click starts listening straight away (the first launch after installing also
         // compiles the model for the Neural Engine).
         controller.loadModel()

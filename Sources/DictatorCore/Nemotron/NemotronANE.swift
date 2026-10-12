@@ -16,7 +16,7 @@ public final class NemotronANEEncoder: NemotronEncoder {
     let T: Int
     let L = 70, projDim = 640, melBins = 128
     var cacheLen = 0
-    public private(set) var steps = 0
+    private(set) var steps = 0
 
     /// Core ML file names for a latency: (subsampling model or nil, stateful model).
     public static func modelNames(_ schedule: NemotronSchedule) -> (sub: String?, state: String) {
@@ -54,7 +54,7 @@ public final class NemotronANEEncoder: NemotronEncoder {
 
     /// Releases every loaded model except this latency's, so only one model's weights stay in memory.
     /// Streams already running keep theirs until they end.
-    public static func keepOnly(_ schedule: NemotronSchedule) {
+    static func keepOnly(_ schedule: NemotronSchedule) {
         let n = modelNames(schedule)
         let keep = Set([n.sub, n.state].compactMap { $0 }.map { $0 + ".mlmodelc" })
         lock.lock(); defer { lock.unlock() }

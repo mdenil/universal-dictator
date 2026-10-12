@@ -1,6 +1,20 @@
 import Foundation
 import Metal
 
+public enum MetalError: Error, CustomStringConvertible {
+    case noDevice
+    case library(String)
+    case missingFunction(String)
+
+    public var description: String {
+        switch self {
+        case .noDevice: return "no Metal device"
+        case .library(let s): return "Metal library: \(s)"
+        case .missingFunction(let s): return "missing Metal function \(s)"
+        }
+    }
+}
+
 /// Owns the Metal device, the command queue, the compiled kernel library and a pipeline cache.
 public final class MetalContext {
     public let device: MTLDevice
@@ -14,9 +28,9 @@ public final class MetalContext {
     }()
 
     public init() throws {
-        guard let device = MTLCreateSystemDefaultDevice() else { throw EngineError.noDevice }
+        guard let device = MTLCreateSystemDefaultDevice() else { throw MetalError.noDevice }
         self.device = device
-        guard let queue = device.makeCommandQueue() else { throw EngineError.noDevice }
+        guard let queue = device.makeCommandQueue() else { throw MetalError.noDevice }
         self.queue = queue
         self.library = try MetalContext.loadLibrary(device: device)
     }
@@ -25,7 +39,7 @@ public final class MetalContext {
     /// (so `00_common.metal` comes first) and compiled once at startup.
     static func loadLibrary(device: MTLDevice) throws -> MTLLibrary {
         guard let dir = Bundle.module.url(forResource: "Metal", withExtension: nil) else {
-            throw EngineError.library("Metal resource directory not found in bundle")
+            throw MetalError.library("Metal resource directory not found in bundle")
         }
         let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "metal" }
@@ -42,7 +56,7 @@ public final class MetalContext {
         do {
             return try device.makeLibrary(source: source, options: opts)
         } catch {
-            throw EngineError.library("\(error)")
+            throw MetalError.library("\(error)")
         }
     }
 
@@ -50,7 +64,7 @@ public final class MetalContext {
     public func pipeline(_ name: String) throws -> MTLComputePipelineState {
         lock.lock(); defer { lock.unlock() }
         if let p = pipelines[name] { return p }
-        guard let fn = library.makeFunction(name: name) else { throw EngineError.missingFunction(name) }
+        guard let fn = library.makeFunction(name: name) else { throw MetalError.missingFunction(name) }
         let p = try device.makeComputePipelineState(function: fn)
         pipelines[name] = p
         return p

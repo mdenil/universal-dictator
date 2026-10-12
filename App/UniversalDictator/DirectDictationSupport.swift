@@ -1,7 +1,6 @@
 import AppKit
 import ApplicationServices
 import Carbon
-import CoreAudio
 import Observation
 import UniversalDictatorKit
 
@@ -11,51 +10,37 @@ import UniversalDictatorKit
 /// Types text into whatever has keyboard focus by posting keyboard events that carry the characters, one
 /// character per key press, on a serial queue (in order, without holding up the caller).
 final class KeyboardTyper: TextTyper, @unchecked Sendable {
-    enum Route: String, CaseIterable { case hidTap, sessionTap, frontmostApp }
-
     let queue = DispatchQueue(label: "typing", qos: .userInitiated)
-    var route: Route = .hidTap
 
     func type(_ text: String) {
-        let route = self.route
-        queue.async { Self.post(text, route: route) }
+        queue.async { Self.post(text) }
     }
 
     func deleteBackward(_ count: Int) {
-        let route = self.route
-        queue.async { Self.postBackspaces(count, route: route) }
+        queue.async { Self.postBackspaces(count) }
     }
 
-    static func postBackspaces(_ count: Int, route: Route) {
+    /// Events go in at the HID level, as if from the keyboard.
+    static func postBackspaces(_ count: Int) {
         let source = CGEventSource(stateID: .privateState)
-        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
         for _ in 0..<count {
             for down in [true, false] {
                 guard let e = CGEvent(keyboardEventSource: source, virtualKey: 51, keyDown: down) else { continue }   // Delete
                 e.flags = []
-                switch route {
-                case .hidTap: e.post(tap: .cghidEventTap)
-                case .sessionTap: e.post(tap: .cgSessionEventTap)
-                case .frontmostApp: if let pid { e.postToPid(pid) }
-                }
+                e.post(tap: .cghidEventTap)
             }
         }
     }
 
-    static func post(_ text: String, route: Route) {
+    static func post(_ text: String) {
         let source = CGEventSource(stateID: .privateState)
-        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
         for ch in text {
             let units = Array(String(ch).utf16)
             for down in [true, false] {
                 guard let e = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
                 e.flags = []                                    // no modifiers, whatever keys are held
                 e.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-                switch route {
-                case .hidTap: e.post(tap: .cghidEventTap)
-                case .sessionTap: e.post(tap: .cgSessionEventTap)
-                case .frontmostApp: if let pid { e.postToPid(pid) }
-                }
+                e.post(tap: .cghidEventTap)
             }
         }
     }
@@ -229,11 +214,11 @@ enum StartSound {
 
     static func play() -> Bool { sound?.stop(); return sound?.play() ?? false }
 
-    /// `notes`: (frequency in Hz, length in ms), played in order.
-    static func wav(notes: [(Double, Double)] = [(587.33, 90.0), (880.0, 110.0)]) -> Data {
+    /// Two notes, D5 then A5: (frequency in Hz, length in ms).
+    static func wav() -> Data {
         let rate = 44100.0
         var samples: [Int16] = []
-        for (freq, ms) in notes {
+        for (freq, ms) in [(587.33, 90.0), (880.0, 110.0)] {
             let n = Int(rate * ms / 1000)
             for i in 0..<n {
                 let t = Double(i) / rate
@@ -249,24 +234,5 @@ enum StartSound {
         d.append("data".data(using: .ascii)!); u32(UInt32(samples.count * 2))
         for s in samples { u16(UInt16(bitPattern: s)) }
         return d
-    }
-
-    /// The default output device's name and sample rate, for the log ("8000 Hz" or "16000 Hz" means a
-    /// headset in call mode).
-    static func outputDescription() -> String {
-        var device = AudioObjectID(0)
-        var size = UInt32(MemoryLayout<AudioObjectID>.size)
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice, mScope: kAudioObjectPropertyScopeGlobal,
-                                              mElement: kAudioObjectPropertyElementMain)
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &device) == noErr else { return "?" }
-        var name: Unmanaged<CFString>?
-        size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        addr.mSelector = kAudioObjectPropertyName
-        _ = AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &name)
-        var rate = Float64(0)
-        size = UInt32(MemoryLayout<Float64>.size)
-        addr.mSelector = kAudioDevicePropertyNominalSampleRate
-        _ = AudioObjectGetPropertyData(device, &addr, 0, nil, &size, &rate)
-        return "\(name?.takeRetainedValue() as String? ?? "?") at \(Int(rate)) Hz"
     }
 }

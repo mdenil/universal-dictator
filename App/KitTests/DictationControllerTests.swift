@@ -24,11 +24,11 @@ final class FakeSession: DictationSessionType, @unchecked Sendable {
     func stop() async -> String {
         ended = true
         let f = final ?? said
-        cont.yield(TranscriptUpdate(committed: f, partial: "", isPaused: false, isFinished: true)); cont.finish(); return f
+        cont.yield(TranscriptUpdate(committed: f, partial: "", isFinished: true)); cont.finish(); return f
     }
     func say(_ committed: String, _ partial: String) {
         said = committed + partial
-        cont.yield(TranscriptUpdate(committed: committed, partial: partial, isPaused: false, isFinished: false))
+        cont.yield(TranscriptUpdate(committed: committed, partial: partial, isFinished: false))
     }
 }
 

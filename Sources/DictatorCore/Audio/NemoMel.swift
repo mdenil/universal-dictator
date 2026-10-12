@@ -114,7 +114,7 @@ public final class NemoMelStream {
     public let fe: NemoMelFrontend
     var audio: [Float] = []          // raw samples received so far
     public private(set) var frames = 0   // mel frames emitted
-    public private(set) var finished = false
+    private(set) var finished = false
 
     public init(_ fe: NemoMelFrontend) { self.fe = fe }
 

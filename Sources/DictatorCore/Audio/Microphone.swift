@@ -21,8 +21,6 @@ public final class Microphone {
     /// Called (on an arbitrary thread) after a format change restarted capture, with the input's new sample
     /// rate, or nil if the restart failed.
     public var onRestart: ((Double?) -> Void)?
-    /// Blocks of audio delivered so far (for diagnostics; read without locking).
-    public private(set) var blocksDelivered = 0
 
     public init() {}
 
@@ -50,7 +48,6 @@ public final class Microphone {
         let hw = input.inputFormat(forBus: 0)
         guard hw.sampleRate > 0, hw.channelCount > 0 else { throw EngineError.io("no microphone input (\(hw))") }
         let deliver = onSamples, target = self.target
-        let counted: ([Float]) -> Void = { [weak self] x in self?.blocksDelivered += 1; deliver?(x) }
         let box = Converter()
         converter = box
         // format nil: the tap takes the node's own format, so it can't mismatch the hardware.
@@ -69,7 +66,7 @@ public final class Microphone {
                 return buf
             }
             if out.frameLength > 0 {
-                counted(Array(UnsafeBufferPointer(start: out.floatChannelData![0], count: Int(out.frameLength))))
+                deliver?(Array(UnsafeBufferPointer(start: out.floatChannelData![0], count: Int(out.frameLength))))
             }
         }
         try engine.start()
@@ -82,9 +79,6 @@ public final class Microphone {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
     }
-
-    /// Runs the format-change restart now (for `--diagnose-start`, which checks audio keeps arriving).
-    public func restartForDiagnosis() { restart() }
 
     /// The input's format changed (a headset switched mode, or the device changed) and the engine stopped:
     /// capture again on a fresh engine.

@@ -38,7 +38,7 @@ public struct ModelAssets: Sendable {
     }
 
     /// `<name>.mlmodelc` or `<name>.mlpackage`, here or in `coreml/`.
-    public func coreMLModel(_ name: String) -> URL? {
+    func coreMLModel(_ name: String) -> URL? {
         existing([name + ".mlmodelc", "coreml/" + name + ".mlmodelc", name + ".mlpackage", "coreml/" + name + ".mlpackage"])
     }
 
@@ -53,8 +53,8 @@ public struct ModelAssets: Sendable {
     }
 
     /// RNN-T decoder, joint and mel frontend weights.
-    public var decoderWeights: URL? { existing(["nemotron-decoder.safetensors", "nemo_extracted/weights.safetensors"]) }
-    public var tokenizerVocab: URL? { existing(["tokenizer.vocab", "nemo_extracted/tokenizer.vocab"]) }
+    var decoderWeights: URL? { existing(["nemotron-decoder.safetensors", "nemo_extracted/weights.safetensors"]) }
+    var tokenizerVocab: URL? { existing(["tokenizer.vocab", "nemo_extracted/tokenizer.vocab"]) }
 
     /// The files `choice` needs that are not here.
     public func missingFiles(for choice: ModelChoice) -> [String] {
@@ -71,8 +71,7 @@ public enum Engine {
     /// Loads a model off the calling thread: decoder weights, tokenizer, and the Core ML models, which
     /// Core ML compiles for the Neural Engine on first use (about 40 s after an install or update, then
     /// cached). A warm-up step runs before returning, so the first dictation starts immediately.
-    public static func load(_ choice: ModelChoice, assets: ModelAssets,
-                            computeUnits: MLComputeUnits = .cpuAndNeuralEngine) async throws -> LoadedModel {
+    public static func load(_ choice: ModelChoice, assets: ModelAssets) async throws -> LoadedModel {
         try await Task.detached(priority: .userInitiated) {
             let missing = assets.missingFiles(for: choice)
             guard missing.isEmpty else { throw EngineError.io("missing model files in \(assets.directory.path): \(missing.joined(separator: ", "))") }
@@ -84,8 +83,7 @@ public enum Engine {
             let frontend = NemoMelFrontend(filterbank: try w.floats("preprocessor.featurizer.fb"),
                                            window: try w.floats("preprocessor.featurizer.window"))
             let tokenizer = try SentencePieceDecoder(vocabFile: assets.tokenizerVocab!)
-            let loaded = LoadedModel(choice: choice, assets: assets, computeUnits: computeUnits,
-                                     decoder: decoder, tokenizer: tokenizer, frontend: frontend)
+            let loaded = LoadedModel(choice: choice, assets: assets, decoder: decoder, tokenizer: tokenizer, frontend: frontend)
             // Warm-up: one silent chunk through a throwaway stream.
             let s = try loaded.makeStreamer()
             s.push(samples: [Float](repeating: 0, count: 16000))
@@ -101,20 +99,18 @@ public enum Engine {
 public final class LoadedModel: @unchecked Sendable {
     public let choice: ModelChoice
     public let assets: ModelAssets
-    let computeUnits: MLComputeUnits
     public let decoder: RNNTDecoder
     public let tokenizer: SentencePieceDecoder
     public let frontend: NemoMelFrontend
 
-    init(choice: ModelChoice, assets: ModelAssets, computeUnits: MLComputeUnits,
-         decoder: RNNTDecoder, tokenizer: SentencePieceDecoder, frontend: NemoMelFrontend) {
-        self.choice = choice; self.assets = assets; self.computeUnits = computeUnits
+    init(choice: ModelChoice, assets: ModelAssets, decoder: RNNTDecoder, tokenizer: SentencePieceDecoder, frontend: NemoMelFrontend) {
+        self.choice = choice; self.assets = assets
         self.decoder = decoder; self.tokenizer = tokenizer; self.frontend = frontend
     }
 
     /// A fresh stream (new encoder state) on the shared weights.
     public func makeStreamer() throws -> NemotronStreamer {
-        let enc = try NemotronANEEncoder(assets: assets, schedule: choice.schedule, computeUnits: computeUnits)
+        let enc = try NemotronANEEncoder(assets: assets, schedule: choice.schedule)
         return NemotronStreamer(encoder: enc, decoder: decoder, tokenizer: tokenizer, frontend: frontend)
     }
 
@@ -127,12 +123,11 @@ public struct TranscriptUpdate: Sendable, Equatable {
     public let committed: String
     /// The word still being recognised (may grow); empty when paused or stopped.
     public let partial: String
-    public let isPaused: Bool
     public let isFinished: Bool
     public var text: String { committed + partial }
 
-    public init(committed: String, partial: String, isPaused: Bool, isFinished: Bool) {
-        self.committed = committed; self.partial = partial; self.isPaused = isPaused; self.isFinished = isFinished
+    public init(committed: String, partial: String, isFinished: Bool) {
+        self.committed = committed; self.partial = partial; self.isFinished = isFinished
     }
 }
 
@@ -147,20 +142,14 @@ public final class DictationSession: @unchecked Sendable {
     var streamer: NemotronStreamer?          // nil while paused or stopped
     var segments: [String] = []
     var finished = false
-    let lock = NSLock()
-    var latest: TranscriptUpdate
     /// The first error from the engine, if any.
     public private(set) var error: Error?
 
     init(model: LoadedModel) throws {
         self.model = model
         (updates, continuation) = AsyncStream<TranscriptUpdate>.makeStream(bufferingPolicy: .bufferingNewest(8))
-        latest = TranscriptUpdate(committed: "", partial: "", isPaused: false, isFinished: false)
         streamer = try model.makeStreamer()
     }
-
-    /// The current transcript.
-    public var current: TranscriptUpdate { lock.lock(); defer { lock.unlock() }; return latest }
 
     /// Feeds 16 kHz mono samples. Ignored while paused or after `stop`.
     public func push(_ samples: [Float]) {
@@ -252,8 +241,6 @@ public final class DictationSession: @unchecked Sendable {
                 }
             }
         }
-        let u = TranscriptUpdate(committed: committed, partial: partial, isPaused: streamer == nil && !finished, isFinished: finished)
-        lock.lock(); latest = u; lock.unlock()
-        continuation.yield(u)
+        continuation.yield(TranscriptUpdate(committed: committed, partial: partial, isFinished: finished))
     }
 }

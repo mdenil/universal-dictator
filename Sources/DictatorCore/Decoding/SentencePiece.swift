@@ -3,7 +3,7 @@ import Foundation
 /// SentencePiece detokenizer: maps token ids to pieces (from `tokenizer.vocab`, one "piece\tscore"
 /// per line, id = line number) and joins them, turning the "▁" word marker into spaces.
 public struct SentencePieceDecoder {
-    public let pieces: [String]
+    let pieces: [String]
 
     public init(vocabFile: URL) throws {
         let text = try String(contentsOf: vocabFile, encoding: .utf8)
@@ -12,7 +12,7 @@ public struct SentencePieceDecoder {
             .map { String($0.split(separator: "\t", maxSplits: 1).first ?? "") }
     }
 
-    public var count: Int { pieces.count }
+    var count: Int { pieces.count }
 
     public func decode(_ ids: [Int]) -> String {
         var bytes = [UInt8]()
