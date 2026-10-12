@@ -14,7 +14,6 @@ public final class ParakeetStream {
     let frameSamples = 1280
     var decState: RNNTDecoder.State
     public private(set) var tokens: [Int] = []
-    public private(set) var gpuTimes: [Double] = []
     public private(set) var wallTimes: [Double] = []
 
     public init(model: NemotronModel) {
@@ -76,7 +75,7 @@ public final class ParakeetStream {
         let proj = Tensor(shape: [outLen, model.decoder.hidden])
         let s = Step()
         s.gemm(out.rows(first, outLen), model.jointEncW, bias: model.jointEncB, out: proj)
-        gpuTimes.append(s.run())
+        s.run()
         var newTokens = [Int]()
         model.decoder.greedy(encProj: proj.toFloats(), frames: outLen, state: &decState, tokens: &newTokens)
         tokens += newTokens
@@ -100,7 +99,6 @@ public final class ParakeetCachedStream {
     let regionOut: Tensor
     public private(set) var tokens: [Int] = []
     public private(set) var wallTimes: [Double] = []
-    public private(set) var gpuTimes: [Double] = []
 
     public init(model: NemotronModel, horizon: Int) {
         precondition(model.kind == .parakeet)
@@ -192,7 +190,7 @@ public final class ParakeetCachedStream {
         if outLen > 0 {
             s.gemm(regionOut.rows(first - F, outLen), model.jointEncW, bias: model.jointEncB, out: proj.rows(0, outLen))
         }
-        gpuTimes.append(s.run())
+        s.run()
         if outLen > 0 {
             var newTokens = [Int]()
             model.decoder.greedy(encProj: proj.rows(0, outLen).toFloats(), frames: outLen, state: &decState, tokens: &newTokens)

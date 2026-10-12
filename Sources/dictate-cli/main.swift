@@ -6,13 +6,12 @@ let usage = """
 usage: dictate-cli <command> [options]
 
 commands:
-  peaks        measure this machine's GPU bandwidth / FLOPS / dispatch overhead
   transcribe   transcribe a WAV/FLAC file with streaming inference:
                transcribe <audio> [--model nemotron|parakeet] [--latency 160|560] [--precision f32|f16]
                parakeet: default exact buffered (Stage A); --horizon H uses frozen-prefix caching
                [--step-log <file>] writes each step's wall time (also for voxtral)
                nemotron: the encoder runs on the Neural Engine (Core ML) by default; --backend metal uses the GPU
-                 (also for eval and stream). DICTATOR_ANE_STATELESS=1 uses the stateless Core ML models.
+                 (also for eval and stream).
   voxtral      voxtral <audio> [--weights model.safetensors|dictator-q8h.safetensors] [--step-log <file>]
   eval         live-stream a manifest to jsonl (score with eval/score.py, eval/latency.py):
                eval --model nemotron-160|nemotron-560|parakeet|parakeet-h<H>|voxtral --manifest <jsonl> --out <jsonl>
@@ -88,14 +87,6 @@ guard let command = args.first else {
 
 do {
     switch command {
-    case "libtime":
-        let t0 = Date()
-        _ = try MetalContext()
-        print(String(format: "Metal library load/compile: %.0f ms", Date().timeIntervalSince(t0) * 1000))
-    case "peaks":
-        let ctx = MetalContext.shared
-        print("device: \(ctx.device.name)  maxBufferLength: \(ctx.device.maxBufferLength / (1 << 20)) MB  recommendedMaxWorkingSet: \(ctx.device.recommendedMaxWorkingSetSize / (1 << 20)) MB")
-        print(try Peaks.measure(ctx))
     case "transcribe":
         guard args.count > 1 else { throw EngineError.io("transcribe: missing audio path") }
         let audio = try AudioFile.readMono16k(URL(fileURLWithPath: args[1]))
@@ -155,11 +146,6 @@ do {
         FileHandle.standardError.write(String(format: "load %.2fs | prefill %.1f ms | %d steps, p50 %.1f ms p99 %.1f ms | audio %.2fs wall %.2fs | tokens %@\n",
             load, sess.stepTimes[0] * 1000, st.count, st.isEmpty ? 0 : st[st.count / 2] * 1000, st.isEmpty ? 0 : st[st.count * 99 / 100] * 1000,
             Double(audio.count) / 16000, wall, sess.emitted.map(String.init).joined(separator: ",")).data(using: .utf8)!)
-        if Step.profiling { print("GPU profile (all steps incl. prefill):"); Step.printProfile() }
-        if !sess.splitTimes.isEmpty {
-            let e = sess.splitTimes.map { $0.enc }.sorted(), d = sess.splitTimes.map { $0.dec }.sorted()
-            FileHandle.standardError.write(String(format: "GPU per step: encoder p50 %.1f ms, decoder p50 %.1f ms\n", e[e.count / 2] * 1000, d[d.count / 2] * 1000).data(using: .utf8)!)
-        }
     case "eval":
         // Transcribes every manifest line with a live streaming transcriber (audio pushed in 20 ms
         // pieces); resumable (skips done lines). Records per-step emission data for latency analysis.
@@ -293,12 +279,6 @@ do {
         let dst = NemotronModel.weightsURL(modelDir: modelDir, precision: precision.rawValue)
         let r = try WeightConverter.convert(src: NemotronModel.weightsURL(modelDir: modelDir, precision: "f32"), dst: dst, precision: precision)
         print("wrote \(dst.path): \(r.tensors) tensors, \(r.bytes / (1 << 20)) MB")
-    case "dump-step":
-        // dump-step <audio> --chunk K --latency 160 --out <dir>
-        let audio = try AudioFile.readMono16k(URL(fileURLWithPath: args[1]))
-        try Probe.dumpNemotronStep(modelDir: URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b"), audio: audio,
-                                   chunk: Int(option("--chunk", "50")!)!, lookahead: Int(option("--latency", "160")!)! / 80 - 1,
-                                   out: URL(fileURLWithPath: option("--out", "scratch/stepdump")!))
     case "stream":
         // Live microphone transcription: stream --model nemotron-160|nemotron-560|parakeet-h4|voxtral
         let make = try transcriberFactory(spec: option("--model", "nemotron-160")!)
@@ -343,9 +323,6 @@ do {
             try fh.close()
             print(String(format: "  saved %.1fs", Double(buf.count) / 16000))
         }
-    case "probe":
-        let w = try? SafeTensorsFile(URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b/nemo_extracted/weights.safetensors"))
-        if args.contains("rnnt") { try Probe.rnntDecoderCPU(modelDir: URL(fileURLWithPath: "models/nemotron-speech-streaming-en-0.6b")) } else if args.contains("gemm") { Probe.gemmShapes() } else if args.contains("voxtral") { Probe.voxtralShapes() } else { Probe.gemmSmallM(weights: w) }
     case "ladder" where args.count > 1 && args[1] == "voxtral":
         // ladder voxtral --golden-root data/golden/voxtral/offline [--weights model.safetensors]
         let model = try VoxtralModel(modelDir: URL(fileURLWithPath: "models/Voxtral-Mini-4B-Realtime-2602"),

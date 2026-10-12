@@ -94,16 +94,4 @@ public struct NPYArray {
         }
         return out
     }
-
-    public static func save(_ floats: [Float], shape: [Int], to url: URL) throws {
-        let shapeStr = shape.count == 1 ? "(\(shape[0]),)" : "(" + shape.map(String.init).joined(separator: ", ") + ")"
-        var header = "{'descr': '<f4', 'fortran_order': False, 'shape': \(shapeStr), }"
-        let total = 10 + header.count + 1
-        header += String(repeating: " ", count: (64 - total % 64) % 64) + "\n"
-        var out = Data([0x93]) + "NUMPY".data(using: .ascii)! + Data([1, 0])
-        out.append(UInt8(header.count & 0xff)); out.append(UInt8(header.count >> 8))
-        out.append(header.data(using: .ascii)!)
-        floats.withUnsafeBytes { out.append(contentsOf: $0) }
-        try out.write(to: url)
-    }
 }

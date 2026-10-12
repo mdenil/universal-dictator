@@ -7,7 +7,6 @@ using namespace metal;
 constant constexpr int ACT_NONE = 0;
 constant constexpr int ACT_RELU = 1;
 constant constexpr int ACT_SILU = 2;
-constant constexpr int ACT_GELU_TANH = 3;
 constant constexpr int ACT_GELU_ERF = 4;
 
 // erf-based GELU is what torch.nn.GELU() computes by default. Metal has no erf, so we use
@@ -24,11 +23,6 @@ inline float apply_act(float x, int act) {
     switch (act) {
         case ACT_RELU: return max(x, 0.0f);
         case ACT_SILU: return x / (1.0f + exp(-x));
-        case ACT_GELU_TANH: {
-            // Clamp the tanh argument: tanh is NaN-prone at extreme inputs in reduced precision.
-            float u = clamp(0.7978845608f * (x + 0.044715f * x * x * x), -15.0f, 15.0f);
-            return 0.5f * x * (1.0f + tanh(u));
-        }
         case ACT_GELU_ERF: return 0.5f * x * (1.0f + erf_approx(x * 0.7071067811865476f));
         default: return x;
     }
@@ -41,3 +35,18 @@ template <typename T> inline float to_f(T v) { return float(v); }
 template <> inline float to_f<ushort>(ushort v) { return bf16_to_float(v); }
 
 template <typename T> inline T from_f(float v) { return T(v); }
+
+// GEMM and GEMV: C[M,N] = out_scale * act(alpha * A[M,K]·B[N,K]^T + bias[N]) + res_scale * R[M,N].
+// B stays in the checkpoint's native [out, in] layout, so weights never need transposing.
+struct GemmParams {
+    int M, N, K;
+    int lda, ldb, ldc;     // row strides in elements
+    int has_bias;
+    int act;
+    int has_residual;
+    int ldr;
+    float alpha;
+    float res_scale;
+    float out_scale;
+    int has_wscale;        // int8 weights: multiply the dot product by wscale[n]
+};

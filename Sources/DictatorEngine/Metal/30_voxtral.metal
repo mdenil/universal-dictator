@@ -99,7 +99,6 @@ kernel void attention_gqa(device const float* Q [[buffer(0)]], device const TK* 
     }
     if (int(tid) < p.d) out[(long)i * p.ldo + h * p.d + tid] = l > 0 ? acc / l : 0.0f;
 }
-template [[host_name("attention_gqa_f32")]] kernel void attention_gqa<float>(device const float*, device const float*, device const float*, device const int2*, device float*, constant AttnParams&, uint2, uint, uint2);
 template [[host_name("attention_gqa_f16")]] kernel void attention_gqa<half>(device const float*, device const half*, device const half*, device const int2*, device float*, constant AttnParams&, uint2, uint, uint2);
 
 // ---------------------------------------------------------------- SwiGLU: out = silu(g) * u
@@ -232,7 +231,6 @@ kernel void attention_mq(device const float* Q [[buffer(0)]], device const TK* K
         out[(long)q * p.ldo + h * d + e] = l > 0 ? acc[qi] / l : 0.0f;
     }
 }
-template [[host_name("attention_mq_f32")]] kernel void attention_mq<float>(device const float*, device const float*, device const float*, device const int2*, device float*, constant AttnParams&, uint, uint);
 template [[host_name("attention_mq_f16")]] kernel void attention_mq<half>(device const float*, device const half*, device const half*, device const int2*, device float*, constant AttnParams&, uint, uint);
 
 // ---------------------------------------------------------------- split-K multi-query attention
@@ -317,7 +315,6 @@ kernel void attention_mq_split(device const float* Q [[buffer(0)]], device const
     if (int(tid) < Tq) { pp[tid] = mrow[tid]; pp[Tq + tid] = lrow[tid]; }
     for (int q = q0, qi = 0; q < Tq; q += qstep, qi++) pp[2 * Tq + q * d + e] = acc[qi];
 }
-template [[host_name("attention_mq_split_f32")]] kernel void attention_mq_split<float>(device const float*, device const float*, device const float*, device const int2*, device float*, constant AttnParams&, constant SplitParams&, uint2, uint);
 template [[host_name("attention_mq_split_f16")]] kernel void attention_mq_split<half>(device const float*, device const half*, device const half*, device const int2*, device float*, constant AttnParams&, constant SplitParams&, uint2, uint);
 
 kernel void attention_combine(device const float* part [[buffer(0)]], device float* out [[buffer(1)]],

@@ -131,9 +131,7 @@ kernel void gemm2_nt(
     INSTANTIATE_GEMM2("gemm2_32x64_" T, TA, TB, TC, 1, 4, 4, 2)
 
 INSTANTIATE_GEMM2_BOTH("f32_f32_f32", float, float, float)
-INSTANTIATE_GEMM2_BOTH("f16_f16_f16", half, half, half)
 INSTANTIATE_GEMM2_BOTH("f32_f16_f32", float, half, float)
-INSTANTIATE_GEMM2_BOTH("f16_f16_f32", half, half, float)
 INSTANTIATE_GEMM2_BOTH("f32_bf16_f32", float, ushort, float)
 INSTANTIATE_GEMM2_BOTH("f32_i8_f32", float, char, float)
 INSTANTIATE_GEMM2_BOTH("f32_i8_f16", float, char, half)

@@ -17,12 +17,10 @@ struct RelAttnParams {
     var scale: Float
 }
 
+/// Activations are f32 throughout.
 private func tag(_ d: DType) -> String {
-    switch d {
-    case .f32: return "f32"
-    case .f16: return "f16"
-    default: fatalError("unsupported activation dtype \(d)")
-    }
+    precondition(d == .f32, "unsupported activation dtype \(d)")
+    return "f32"
 }
 
 extension Step {
@@ -91,13 +89,6 @@ extension Step {
         dispatch(p, threadgroups: MTLSize(width: Tq, height: H, depth: 1), threads: MTLSize(width: dk, height: 1, depth: 1))
     }
 
-    /// out = a + s * b (elementwise, same shapes)
-    public func addScaled(_ a: Tensor, _ b: Tensor, scale s: Float = 1, out: Tensor) {
-        let p = try! ctx.pipeline("add_scaled_\(tag(a.dtype))")
-        bind(a, 0); bind(b, 1); bind(out, 2); setBytes(s, 3)
-        dispatch1D(p, count: a.count)
-    }
-
     /// Copies all of `src` into `dst` (same byte size, multiple of 4 bytes).
     public func copy(_ src: Tensor, into dst: Tensor) {
         precondition(src.byteCount == dst.byteCount && src.byteCount % 4 == 0, "copy \(src.shape) -> \(dst.shape)")
@@ -113,26 +104,7 @@ extension Step {
         bind(t, 0)
         dispatch1D(p, count: t.byteCount / 4)
     }
-
-    public func cast(_ src: Tensor, into dst: Tensor) {
-        precondition(src.count == dst.count)
-        let name: String
-        switch (src.dtype, dst.dtype) {
-        case (.f32, .f16): name = "cast_f32_f16"
-        case (.f16, .f32): name = "cast_f16_f32"
-        default: fatalError("cast \(src.dtype)->\(dst.dtype)")
-        }
-        let p = try! ctx.pipeline(name)
-        bind(src, 0); bind(dst, 1)
-        dispatch1D(p, count: src.count)
-    }
 }
-
-/// Key-range splits for multi-query attention (DICTATOR_ATTN_SPLITS, default 4; 1 disables).
-let attentionSplits = Int(ProcessInfo.processInfo.environment["DICTATOR_ATTN_SPLITS"] ?? "4") ?? 4
-
-/// Kill-switch for the multi-query attention kernel (DICTATOR_ATTN_MQ=0).
-let attentionMQEnabled = ProcessInfo.processInfo.environment["DICTATOR_ATTN_MQ"] != "0"
 
 struct Im2ColParams { var Tin: Int32, C: Int32, K: Int32, stride: Int32, pad: Int32, Tout: Int32 }
 struct RopeParams { var T: Int32, H: Int32, d: Int32, ld: Int32, pos0: Int32 }
@@ -160,16 +132,18 @@ extension Step {
         enc.dispatchThreads(MTLSize(width: d / 2, height: H, depth: T), threadsPerThreadgroup: MTLSize(width: d / 2, height: 1, depth: 1))
     }
 
-    /// Grouped-query attention with per-query key ranges. q [Tq, Hq*d], k/v [Tk, Hkv*d], out [Tq, Hq*d].
+    /// Grouped-query attention with per-query key ranges. q [Tq, Hq*d] f32, k/v [Tk, Hkv*d] f16, out [Tq, Hq*d] f32.
     public func attention(q: Tensor, k: Tensor, v: Tensor, ranges: Tensor, out: Tensor, heads Hq: Int, kvHeads Hkv: Int, headDim d: Int) {
+        precondition(k.dtype == .f16 && v.dtype == .f16, "attention: K/V caches are f16")
         let Tq = q.count / (Hq * d), Tk = k.count / (Hkv * d)
-        // Few queries: one threadgroup per head reads each K/V row once for all queries.
-        let splits = attentionSplits
-        if Tq > 1 && Tq <= 8 && d <= 128 && attentionMQEnabled && splits > 1 && Tk >= 256 {
+        // Few queries: one threadgroup per head reads each K/V row once for all queries; with many keys
+        // the key range is split across 4 threadgroups and combined.
+        let splits = 4
+        if Tq > 1 && Tq <= 8 && d <= 128 && Tk >= 256 {
             let params = AttnParams(Tq: Int32(Tq), Tk: Int32(Tk), Hq: Int32(Hq), Hkv: Int32(Hkv), d: Int32(d), ldq: Int32(Hq * d),
                                     ldk: Int32(Hkv * d), ldo: Int32(Hq * d), scale: 1 / Float(d).squareRoot())
             let part = Tensor(ctx, shape: [Hq * splits * Tq * (d + 2)])
-            let p = try! ctx.pipeline(k.dtype == .f16 ? "attention_mq_split_f16" : "attention_mq_split_f32")
+            let p = try! ctx.pipeline("attention_mq_split_f16")
             bind(q, 0); bind(k, 1); bind(v, 2); bind(ranges, 3); bind(part, 4)
             setBytes(params, 5); setBytes(Int32(splits), 6)
             dispatch(p, threadgroups: MTLSize(width: Hq, height: splits, depth: 1), threads: MTLSize(width: 128, height: 1, depth: 1))
@@ -179,15 +153,15 @@ extension Step {
             enc.dispatchThreads(MTLSize(width: d, height: Tq, depth: Hq), threadsPerThreadgroup: MTLSize(width: d, height: 1, depth: 1))
             return
         }
-        if Tq > 1 && Tq <= 8 && d <= 128 && attentionMQEnabled {
-            let p = try! ctx.pipeline(k.dtype == .f16 ? "attention_mq_f16" : "attention_mq_f32")
+        if Tq > 1 && Tq <= 8 && d <= 128 {
+            let p = try! ctx.pipeline("attention_mq_f16")
             bind(q, 0); bind(k, 1); bind(v, 2); bind(ranges, 3); bind(out, 4)
             setBytes(AttnParams(Tq: Int32(Tq), Tk: Int32(Tk), Hq: Int32(Hq), Hkv: Int32(Hkv), d: Int32(d), ldq: Int32(Hq * d),
                                 ldk: Int32(Hkv * d), ldo: Int32(Hq * d), scale: 1 / Float(d).squareRoot()), 5)
             dispatch(p, threadgroups: MTLSize(width: Hq, height: 1, depth: 1), threads: MTLSize(width: 128, height: 1, depth: 1))
             return
         }
-        let p = try! ctx.pipeline(k.dtype == .f16 ? "attention_gqa_f16" : "attention_gqa_f32")
+        let p = try! ctx.pipeline("attention_gqa_f16")
         bind(q, 0); bind(k, 1); bind(v, 2); bind(ranges, 3); bind(out, 4)
         setBytes(AttnParams(Tq: Int32(Tq), Tk: Int32(Tk), Hq: Int32(Hq), Hkv: Int32(Hkv), d: Int32(d), ldq: Int32(Hq * d),
                             ldk: Int32(Hkv * d), ldo: Int32(Hq * d), scale: 1 / Float(d).squareRoot()), 5)

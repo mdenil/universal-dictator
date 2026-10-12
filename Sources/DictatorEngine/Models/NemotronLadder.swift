@@ -54,13 +54,6 @@ public enum NemotronLadder {
                 ref = tm; shape = [T, D]
             }
             rows.append(compareTensors("L5 stream enc_out", ours: encRows, ref: ref, shape: shape))
-            if ProcessInfo.processInfo.environment["DICTATOR_LADDER_FRAMES"] == "1", encRows.count == ref.count {
-                let D = model.encoder.config.dModel
-                for t in 0..<(ref.count / D) {
-                    let r = compareTensors("frame \(t)", ours: Array(encRows[(t * D)..<((t + 1) * D)]), ref: Array(ref[(t * D)..<((t + 1) * D)]), shape: [D])
-                    if r.cosine < 0.9999 { print("  ", r) }
-                }
-            }
         }
         let refTokens = (try? NPYArray.load(streamDir.appendingPathComponent("tokens.npy")).ints()) ?? []
         rows.append(LadderRow(name: "L5 stream tokens", shape: [stream.tokens.count], cosine: stream.tokens == refTokens ? 1 : 0,
@@ -70,11 +63,6 @@ public enum NemotronLadder {
 
     /// Runs the offline ladder for one utterance directory of golden tensors.
     /// Expects: audio.npy, mel.npy [T,128], pre_encode.npy, layer_XX_out.npy, enc_out.npy, tokens.npy.
-    public static func run(modelDir: URL, goldenDir: URL, left: Int, right: Int, config: FastConformerConfig = .nemotron,
-                           precision: String = "f32") throws -> (rows: [LadderRow], text: String, refText: String) {
-        try run(modelDir: modelDir, goldenDir: goldenDir, kind: .nemotron, mask: .chunkedLimited(left: left, right: right), precision: precision)
-    }
-
     public static func run(modelDir: URL, goldenDir: URL, kind: NemoModelKind, mask: FastConformerEncoder.MaskSpec,
                            precision: String = "f32") throws -> (rows: [LadderRow], text: String, refText: String) {
         let config = kind.config

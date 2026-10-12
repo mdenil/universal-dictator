@@ -263,7 +263,7 @@ public final class FastConformerEncoder {
                      keys: Tensor, values: Tensor, convIn: Tensor, validFrames: Int, tap: Tap? = nil) {
         let w = layers[li]
         let cfg = config
-        let D = cfg.dModel, T = x.shape[0]
+        let T = x.shape[0]
         let tmpD = ws.tmpD.rows(0, T), ffH = ws.ffH.rows(0, T)
         let r1 = ws.r1.rows(0, T), r2 = ws.r2.rows(0, T), r3 = ws.r3.rows(0, T), r4 = ws.r4.rows(0, T)
         func capture(_ name: String, _ t: Tensor) {
@@ -327,7 +327,6 @@ public final class FastConformerEncoder {
         /// NeMo `chunked_limited_with_rc` [left, chunk, right]: frame i sees
         /// [c*chunk - left, c*chunk + chunk - 1 + right] with c = i / chunk (inclusive, clipped).
         case chunkedLimitedRC(left: Int, chunk: Int, right: Int)
-        case full
 
         public func ranges(T: Int) -> [Int32] {
             switch self {
@@ -340,7 +339,6 @@ public final class FastConformerEncoder {
                     out.append(Int32(min(T, ci * c + c + r)))
                 }
                 return out
-            case .full: return (0..<T).flatMap { _ in [Int32(0), Int32(T)] }
             }
         }
     }
@@ -358,13 +356,8 @@ public final class FastConformerEncoder {
         return r
     }
 
-    /// Offline forward over a full utterance with the streaming attention mask [left, right]
-    /// (chunked_limited). Returns encoder output [T', D]. `tap` receives "pre_encode",
-    /// "layer_XX_out" and, for layer 0, the internal seams.
-    public func forwardOffline(mel: [Float], melFrames: Int, validMel: Int, left: Int, right: Int, tap: Tap? = nil) -> Tensor {
-        forwardOffline(mel: mel, melFrames: melFrames, validMel: validMel, mask: .chunkedLimited(left: left, right: right), tap: tap)
-    }
-
+    /// Offline forward over a full utterance with a streaming attention mask. Returns encoder output
+    /// [T', D]. `tap` receives "pre_encode", "layer_XX_out" and, for layer 0, the internal seams.
     public func forwardOffline(mel: [Float], melFrames: Int, validMel: Int, mask: MaskSpec, tap: Tap? = nil) -> Tensor {
         let cfg = config
         let D = cfg.dModel
@@ -448,7 +441,7 @@ public final class FastConformerEncoder {
     func encodeStreamStep(_ s: Step, _ ws: Workspace, state st: StreamState, melChunk: Tensor, validMel: Int, drop: Int,
                           out: Tensor) -> (T: Int, valid: Int) {
         let cfg = config
-        let D = cfg.dModel, K = cfg.convKernel, L = st.leftContext
+        let K = cfg.convKernel, L = st.leftContext
         let Tsub = subsampledLength(melChunk.shape[0])
         var validSub = validMel
         for _ in 0..<3 { validSub = nextLen(validSub) }

@@ -103,7 +103,7 @@ public final class VoxtralModel {
     let decDim = 3072, decHeads = 32, decKV = 8, decHD = 128, decFF = 9216, decLayers = 26, decWindow = 8192
     public let vocab = 131072
     public let nDelay: Int
-    public let bos = 1, eos = 2, streamingPad = 32, streamingWord = 33
+    public let bos = 1, eos = 2, streamingPad = 32
     public let leftPadTokens = 32
 
     let w: SafeTensorsFile
@@ -257,19 +257,16 @@ public final class VoxtralSession {
     let convMelCache: Tensor      // last 2 mel frames (conv1 left context)
     let conv1Cache: Tensor        // last conv1 output frame (conv2 left context)
     let scratch: Scratch
-    public private(set) var ids: [Int] = []       // all decoder input ids so far (prompt + emitted)
     public private(set) var emitted: [Int] = []   // tokens produced after the prompt
     public private(set) var stepTimes: [Double] = []
-    public var logitsTap: ((Int, [Float]) -> Void)?
     public var tap: ((String, Tensor) -> Void)?
 
     public init(model: VoxtralModel) {
         self.model = model
         ctx = model.ctx
-        // K/V caches in fp16 (DICTATOR_KV_F32=1 keeps fp32).
-        let kvType: DType = ProcessInfo.processInfo.environment["DICTATOR_KV_F32"] == "1" ? .f32 : .f16
-        encKV = SlidingKV(layers: model.encLayers, window: model.encWindow, slack: 250, width: model.encHeads * model.encHD, dtype: kvType, ctx: ctx)
-        decKV = SlidingKV(layers: model.decLayers, window: model.decWindow, slack: 512, width: model.decKV * model.decHD, dtype: kvType, ctx: ctx)
+        // K/V caches in fp16.
+        encKV = SlidingKV(layers: model.encLayers, window: model.encWindow, slack: 250, width: model.encHeads * model.encHD, dtype: .f16, ctx: ctx)
+        decKV = SlidingKV(layers: model.decLayers, window: model.decWindow, slack: 512, width: model.decKV * model.decHD, dtype: .f16, ctx: ctx)
         scratch = Scratch(ctx)
         convMelCache = Tensor(ctx, shape: [2, 128]); memset(convMelCache.contents, 0, convMelCache.byteCount)
         conv1Cache = Tensor(ctx, shape: [1, 1280]); memset(conv1Cache.contents, 0, conv1Cache.byteCount)
@@ -290,7 +287,6 @@ public final class VoxtralSession {
         let m = model
         let T = mel.shape[0], n = T / 8, E = T / 2
         // conv1: causal k=3 s=1 over [2 cached ; T] mel frames.
-        s.section("enc.stem")
         let melX = scratch.get("melX", [T + 2, 128])
         s.copy(convMelCache, into: melX.rows(0, 2))
         s.copy(mel, into: melX.rows(2, T))
@@ -316,21 +312,17 @@ public final class VoxtralSession {
         let nrm = scratch.get("encNrm", [E, m.encDim]), q = scratch.get("encQ", [E, W]), att = scratch.get("encAtt", [E, W])
         let g = scratch.get("encG", [E, m.encFF]), u = scratch.get("encU", [E, m.encFF])
         for (li, L) in m.enc.enumerated() {
-            s.section("enc.qkv")
             s.rmsNorm(x, gamma: L.n1, out: nrm)
             s.gemm(nrm, L.wq, bias: L.bq, out: q)
             let kr = encKV.k[li].rows(slot, E), vr = encKV.v[li].rows(slot, E)
             s.gemm(nrm, L.wk, out: kr)
             s.gemm(nrm, L.wv, bias: L.bv, out: vr)
-            s.section("enc.rope+attn")
             s.rope(q, heads: m.encHeads, headDim: m.encHD, invFreq: m.encInvFreq, pos0: encPos)
             s.rope(kr, heads: m.encHeads, headDim: m.encHD, invFreq: m.encInvFreq, pos0: encPos)
             s.attention(q: q, k: encKV.k[li].rows(0, slot + E), v: encKV.v[li].rows(0, slot + E), ranges: ranges, out: att,
                         heads: m.encHeads, kvHeads: m.encHeads, headDim: m.encHD)
             let x2 = scratch.get("encB", [E, m.encDim])
-            s.section("enc.o")
             s.gemm(att, L.wo, bias: L.bo, out: x2, residual: x)
-            s.section("enc.ffn")
             s.rmsNorm(x2, gamma: L.n2, out: nrm)
             s.gemm(nrm, L.wgate, out: g)
             s.gemm(nrm, L.wup, out: u)
@@ -342,7 +334,6 @@ public final class VoxtralSession {
         }
         encKV.count = slot + E
         encPos += E
-        s.section("enc.adapter")
         let xn = scratch.get("encB", [E, m.encDim])
         s.rmsNorm(x, gamma: m.encNorm, out: xn)
         // §5 adapter: stack 4 consecutive frames (row-major reshape), 5120 -> 3072 GELU -> 3072.
@@ -353,10 +344,9 @@ public final class VoxtralSession {
     }
 
     /// §6: decoder over M positions with input ids and audio embeddings; returns argmax of the last position.
-    func decode(_ s: Step, ids newIds: [Int], audio: Tensor) -> (Tensor, Tensor) {
+    func decode(_ s: Step, ids newIds: [Int], audio: Tensor) -> Tensor {
         let m = model
         let M = newIds.count
-        s.section("dec.embed")
         let idsT = scratch.get("ids", [M], .i32)
         newIds.map { Int32($0) }.withUnsafeBytes { idsT.contents.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
         var x = scratch.get("decA", [M, m.decDim])
@@ -370,21 +360,17 @@ public final class VoxtralSession {
         let nrm = scratch.get("decNrm", [M, m.decDim]), q = scratch.get("decQ", [M, QW]), att = scratch.get("decAtt", [M, QW])
         let g = scratch.get("decG", [M, m.decFF]), u = scratch.get("decU", [M, m.decFF])
         for (li, L) in m.dec.enumerated() {
-            s.section("dec.qkv")
             s.rmsNorm(x, gamma: L.n1, out: nrm)
             s.gemm(nrm, L.wq, out: q)
             let kr = decKV.k[li].rows(slot, M), vr = decKV.v[li].rows(slot, M)
             s.gemm(nrm, L.wk, out: kr)
             s.gemm(nrm, L.wv, out: vr)
-            s.section("dec.rope+attn")
             s.rope(q, heads: m.decHeads, headDim: m.decHD, invFreq: m.decInvFreq, pos0: decPos)
             s.rope(kr, heads: m.decKV, headDim: m.decHD, invFreq: m.decInvFreq, pos0: decPos)
             s.attention(q: q, k: decKV.k[li].rows(0, slot + M), v: decKV.v[li].rows(0, slot + M), ranges: ranges, out: att,
                         heads: m.decHeads, kvHeads: m.decKV, headDim: m.decHD)
             let x2 = scratch.get("decB", [M, m.decDim])
-            s.section("dec.o")
             s.gemm(att, L.wo, out: x2, residual: x)
-            s.section("dec.ffn")
             s.rmsNorm(x2, gamma: L.n2ada, out: nrm)
             s.gemm(nrm, L.wgate, out: g)
             s.gemm(nrm, L.wup, out: u)
@@ -396,18 +382,17 @@ public final class VoxtralSession {
         }
         decKV.count = slot + M
         decPos += M
-        s.section("dec.head")
         let last = scratch.get("decLast", [1, m.decDim])
         s.rmsNorm(x.rows(M - 1, 1), gamma: m.decNorm, out: last)
         let logits = scratch.get("logits", [1, m.vocab])
         s.gemm(last, m.head, out: logits)
         let idx = scratch.get("argIdx", [1], .i32), val = scratch.get("argVal", [1])
         s.argmax(logits, idx: idx, val: val)
-        return (idx, logits)
+        return idx
     }
 
     /// Prefill: prompt positions with mel frames 0 ..< 8 * prompt.count. Returns the first emitted token.
-    /// Unless disabled (DICTATOR_VOX_SNAPSHOT=0), the silent prefix (decoder positions 0..30, encoder
+    /// Unless `useSnapshot` is off, the silent prefix (decoder positions 0..30, encoder
     /// frames 0..123, which see only the zero left-pad and fixed prompt tokens) is restored from a
     /// per-model snapshot and only the remaining 8 positions are computed.
     @discardableResult
@@ -425,17 +410,16 @@ public final class VoxtralSession {
         let melT = Tensor.from(Array(mel[(8 * from * 128)...]), shape: [8 * n, 128], dtype: .f32, ctx)
         let audio = Tensor(ctx, shape: [n, model.decDim])
         encodeAudio(s, mel: melT, out: audio)
-        let (idx, logits) = decode(s, ids: Array(model.prompt[from...]), audio: audio)
+        let idx = decode(s, ids: Array(model.prompt[from...]), audio: audio)
         s.run()
-        ids = model.prompt
         let tok = Int(idx.contents.assumingMemoryBound(to: Int32.self)[0])
-        logitsTap?(0, logits.toFloats())
         emitted.append(tok)
         stepTimes.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
         return tok
     }
 
-    public var useSnapshot = ProcessInfo.processInfo.environment["DICTATOR_VOX_SNAPSHOT"] != "0"
+    /// Off in the ladder, which needs every position computed.
+    public var useSnapshot = true
 
     /// State after the constant silent prefix of the stream.
     public struct Snapshot {
@@ -480,29 +464,19 @@ public final class VoxtralSession {
         decKV.count = snap.positions; decPos = snap.positions
     }
 
-    /// GPU seconds of the encoder and decoder command buffers (only when `splitTiming` is set).
-    public private(set) var splitTimes: [(enc: Double, dec: Double)] = []
-    public var splitTiming = ProcessInfo.processInfo.environment["DICTATOR_SPLIT_TIMING"] == "1"
-
     /// One 80 ms step: 8 new mel frames and the last emitted token. Returns the next token.
     @discardableResult
     public func step(mel: [Float]) -> Int {
         precondition(mel.count == 8 * 128)
         let t0 = DispatchTime.now().uptimeNanoseconds
-        var s = Step(ctx)
+        let s = Step(ctx)
         let melT = scratch.get("melIn", [8, 128])
         melT.copy(from: mel)
         let audio = scratch.get("audioEmb", [1, model.decDim])
         encodeAudio(s, mel: melT, out: audio)
-        var encT = 0.0
-        if splitTiming { encT = s.run(); s = Step(ctx) }
-        let prev = emitted.last!
-        let (idx, logits) = decode(s, ids: [prev], audio: audio)
-        let decT = s.run()
-        if splitTiming { splitTimes.append((encT, decT)) }
-        ids.append(prev)
+        let idx = decode(s, ids: [emitted.last!], audio: audio)
+        s.run()
         let tok = Int(idx.contents.assumingMemoryBound(to: Int32.self)[0])
-        logitsTap?(emitted.count, logits.toFloats())
         emitted.append(tok)
         stepTimes.append(Double(DispatchTime.now().uptimeNanoseconds - t0) / 1e9)
         return tok

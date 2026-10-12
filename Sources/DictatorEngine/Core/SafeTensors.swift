@@ -13,7 +13,6 @@ public final class SafeTensorsFile {
 
     public let url: URL
     public let entries: [String: Entry]
-    public let metadata: [String: String]
     private let base: UnsafeMutableRawPointer
     private let mappedLength: Int
     private let dataStart: Int
@@ -43,9 +42,8 @@ public final class SafeTensorsFile {
             throw EngineError.io("bad safetensors header")
         }
         var entries: [String: Entry] = [:]
-        var meta: [String: String] = [:]
         for (k, v) in json {
-            if k == "__metadata__" { meta = (v as? [String: String]) ?? [:]; continue }
+            if k == "__metadata__" { continue }
             guard let d = v as? [String: Any], let dt = d["dtype"] as? String, let shape = d["shape"] as? [Int],
                   let offs = d["data_offsets"] as? [Int] else { continue }
             let dtype: DType
@@ -61,7 +59,6 @@ public final class SafeTensorsFile {
             entries[k] = Entry(dtype: dtype, shape: shape, begin: offs[0], end: offs[1])
         }
         self.entries = entries
-        self.metadata = meta
     }
 
     deinit { munmap(base, mappedLength) }
@@ -92,12 +89,6 @@ public final class SafeTensorsFile {
         let abs = dataStart + e.begin
         let len = e.end - e.begin
         let (buf, off) = try window(containing: abs, length: len)
-        if e.dtype == .u8, entries[name + ".q4scale"] != nil {
-            // Packed int4: stored [N, K/2] bytes, logical [N, K].
-            let t = Tensor(buffer: buf, offset: off, shape: [e.shape[0], e.shape[1] * 2], dtype: .q4)
-            t.qscale = try tensor(name + ".q4scale")
-            return t
-        }
         let t = Tensor(buffer: buf, offset: off, shape: e.shape, dtype: e.dtype)
         if e.dtype == .i8, entries[name + ".qscale"] != nil { t.qscale = try tensor(name + ".qscale") }
         return t

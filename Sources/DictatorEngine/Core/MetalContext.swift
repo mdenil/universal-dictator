@@ -46,26 +46,13 @@ public final class MetalContext {
         }
     }
 
-    /// Returns a cached pipeline for `name`, specialised with integer function constants
-    /// (index -> value) when given.
-    public func pipeline(_ name: String, constants: [Int: Int32] = [:]) throws -> MTLComputePipelineState {
-        let key = constants.isEmpty ? name : name + "|" + constants.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+    /// Returns the cached pipeline for the kernel `name`.
+    public func pipeline(_ name: String) throws -> MTLComputePipelineState {
         lock.lock(); defer { lock.unlock() }
-        if let p = pipelines[key] { return p }
-        let fn: MTLFunction
-        if constants.isEmpty {
-            guard let f = library.makeFunction(name: name) else { throw EngineError.missingFunction(name) }
-            fn = f
-        } else {
-            let values = MTLFunctionConstantValues()
-            for (idx, v) in constants {
-                var vv = v
-                values.setConstantValue(&vv, type: .int, index: idx)
-            }
-            fn = try library.makeFunction(name: name, constantValues: values)
-        }
+        if let p = pipelines[name] { return p }
+        guard let fn = library.makeFunction(name: name) else { throw EngineError.missingFunction(name) }
         let p = try device.makeComputePipelineState(function: fn)
-        pipelines[key] = p
+        pipelines[name] = p
         return p
     }
 

@@ -2,7 +2,7 @@ import Foundation
 import Metal
 
 public enum Activation: Int32 {
-    case none = 0, relu = 1, silu = 2, geluTanh = 3, geluErf = 4
+    case none = 0, relu = 1, silu = 2, geluErf = 4
 }
 
 struct GemmParams {
@@ -22,14 +22,8 @@ struct GemmParams {
 /// A whole streaming step is recorded into one `Step` and committed once.
 public final class Step {
     public let ctx: MetalContext
-    public private(set) var cb: MTLCommandBuffer
-    public private(set) var enc: MTLComputeCommandEncoder
-    /// Profiling (DICTATOR_PROFILE=1): `section(name)` runs the work recorded since the previous
-    /// section as its own command buffer and charges its GPU time to the previous section's name.
-    public static let profiling = ProcessInfo.processInfo.environment["DICTATOR_PROFILE"] == "1"
-    public nonisolated(unsafe) static var profile: [String: Double] = [:]
-    private var currentSection: String?
-    private var sectionTotal = 0.0
+    public let cb: MTLCommandBuffer
+    public let enc: MTLComputeCommandEncoder
 
     public init(_ ctx: MetalContext = .shared) {
         self.ctx = ctx
@@ -37,42 +31,9 @@ public final class Step {
         self.enc = cb.makeComputeCommandEncoder()!
     }
 
-    /// Marks the start of a named section (no-op unless profiling).
-    public func section(_ name: String) {
-        guard Step.profiling else { return }
-        flushSection()
-        currentSection = name
-    }
-
-    private func flushSection() {
-        enc.endEncoding()
-        cb.commit()
-        cb.waitUntilCompleted()
-        let t = cb.gpuEndTime - cb.gpuStartTime
-        sectionTotal += t
-        if let n = currentSection { Step.profile[n, default: 0] += t }
-        cb = ctx.queue.makeCommandBuffer()!
-        enc = cb.makeComputeCommandEncoder()!
-    }
-
-    public static func printProfile() {
-        let total = profile.values.reduce(0, +)
-        for (k, v) in profile.sorted(by: { $0.value > $1.value }) {
-            print(String(format: "  %-22@ %9.1f ms  %5.1f%%", k as NSString, v * 1000, 100 * v / max(total, 1e-12)))
-        }
-    }
-
     /// Ends encoding, commits and waits. Returns GPU execution time in seconds.
     @discardableResult
     public func run() -> Double {
-        if Step.profiling {
-            flushSection()
-            let t = sectionTotal
-            sectionTotal = 0
-            currentSection = nil
-            enc.endEncoding(); cb.commit(); cb.waitUntilCompleted()
-            return t
-        }
         enc.endEncoding()
         cb.commit()
         cb.waitUntilCompleted()
@@ -102,11 +63,6 @@ public final class Step {
     }
 }
 
-/// Kill-switch for the skinny GEMV path (DICTATOR_GEMV=0 disables it).
-let gemvEnabled = ProcessInfo.processInfo.environment["DICTATOR_GEMV"] != "0"
-/// Kill-switch for GEMM v2 (DICTATOR_GEMM_V1=1 uses the original tiled kernel).
-let gemmV1 = ProcessInfo.processInfo.environment["DICTATOR_GEMM_V1"] == "1"
-
 private func dtypeTag(_ d: DType) -> String {
     switch d {
     case .f32: return "f32"
@@ -126,37 +82,14 @@ extension Step {
         let K = a.shape.last!
         let M = a.count / K
         let N = w.shape[0]
-        if w.dtype == .q4 {
-            // 4-bit weights run through the GEMV kernel in slices of 8 activation rows.
-            precondition(a.dtype == .f32 && out.dtype == .f32 && K % 64 == 0, "q4 gemm: f32 activations, K % 64 == 0")
-            var r0 = 0
-            while r0 < M {
-                let m = min(8, M - r0)
-                let a2 = a.reshaped([M, K]).rows(r0, m), o2 = out.reshaped([M, N]).rows(r0, m)
-                let r2 = residual.map { $0.reshaped([M, N]).rows(r0, m) }
-                var params = GemmParams(M: Int32(m), N: Int32(N), K: Int32(K), lda: Int32(K), ldb: Int32(K), ldc: Int32(N),
-                                        hasBias: bias == nil ? 0 : 1, act: act.rawValue, hasResidual: r2 == nil ? 0 : 1, ldr: Int32(N),
-                                        alpha: alpha, resScale: resScale, outScale: outScale, hasWScale: 1)
-                bind(a2, 0); bind(w, 1); bind(o2, 2)
-                if let b = bias { bind(b, 3) } else { bind(o2, 3) }
-                if let r = r2 { bind(r, 4) } else { bind(o2, 4) }
-                enc.setBytes(&params, length: MemoryLayout<GemmParams>.stride, index: 5)
-                bind(w.qscale!, 6)
-                dispatch(try! ctx.pipeline("gemv_q4_f32"), threadgroups: MTLSize(width: (N + 15) / 16, height: 1, depth: 1),
-                         threads: MTLSize(width: 128, height: 1, depth: 1))
-                r0 += m
-            }
-            return
-        }
         precondition(w.shape.count == 2 && w.shape[1] == K, "gemm: a \(a.shape) w \(w.shape)")
         precondition(out.count == M * N, "gemm: out \(out.shape) expected \(M)x\(N)")
         let types = "\(dtypeTag(a.dtype))_\(dtypeTag(w.dtype))_\(dtypeTag(out.dtype))"
         // Skinny inputs are weight-bandwidth bound: use the GEMV kernel (reads each weight row once).
         let kAlign = w.dtype == .i8 ? 16 : (w.dtype.size == 2 ? 8 : 4)
-        let skinny = M <= 8 && K % kAlign == 0 && gemvEnabled
+        let skinny = M <= 8 && K % kAlign == 0
         // GEMM v2 uses 32x64 tiles (a 64x64 v2 tile measured slower; see PERF_LOG R1).
-        // DICTATOR_GEMM_V1=1 restores the v1 kernel.
-        let name = skinny ? "gemv_nt_" + types : (gemmV1 ? "gemm_nt_" + types : "gemm2_32x64_" + types)
+        let name = skinny ? "gemv_nt_" + types : "gemm2_32x64_" + types
         let p = try! ctx.pipeline(name)
         var params = GemmParams(M: Int32(M), N: Int32(N), K: Int32(K), lda: Int32(K), ldb: Int32(K), ldc: Int32(N),
                                 hasBias: bias == nil ? 0 : 1, act: act.rawValue,
@@ -173,8 +106,7 @@ extension Step {
             dispatch(p, threadgroups: MTLSize(width: (N + 15) / 16, height: 1, depth: 1),
                      threads: MTLSize(width: 128, height: 1, depth: 1))
         } else {
-            let bm = gemmV1 ? 64 : 32
-            dispatch(p, threadgroups: MTLSize(width: (N + 63) / 64, height: (M + bm - 1) / bm, depth: 1),
+            dispatch(p, threadgroups: MTLSize(width: (N + 63) / 64, height: (M + 31) / 32, depth: 1),
                      threads: MTLSize(width: 128, height: 1, depth: 1))
         }
     }

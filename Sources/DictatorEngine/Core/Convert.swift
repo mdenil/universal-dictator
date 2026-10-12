@@ -25,7 +25,7 @@ public final class SafeTensorsWriter {
         case .bf16: tag = "BF16"
         case .i32: tag = "I32"
         case .i8: tag = "I8"
-        case .u8, .q4: tag = "U8"
+        case .u8: tag = "U8"
         }
         items.append(Item(name: name, dtype: tag, shape: shape, bytes: bytes, produce: produce))
     }
@@ -127,16 +127,11 @@ extension WeightConverter {
     ///   dec-ffn: decoder mlp gate/up/down   dec-attn: decoder q/k/v/o   enc: encoder layer linears
     ///   adapter: multi_modal_projector      stem: conv1/conv2
     ///   head: an int8 copy of the tied output head as "lm_head.weight" (the input embedding stays bf16)
-    /// A group written as "name:q4" uses 4-bit group-64 weights instead of int8.
-    public static func quantizeVoxtral(src: URL, dst: URL, groups groupSpecs: Set<String>) throws -> (quantized: Int, bytes: Int) {
+    public static func quantizeVoxtral(src: URL, dst: URL, groups: Set<String>) throws -> (quantized: Int, bytes: Int) {
         let f = try SafeTensorsFile(src)
         let w = SafeTensorsWriter()
         w.metadata["source"] = src.lastPathComponent
-        w.metadata["quantized_groups"] = groupSpecs.sorted().joined(separator: ",")
-        var groups = Set<String>(), q4 = Set<String>()
-        for g in groupSpecs {
-            if g.hasSuffix(":q4") { let n = String(g.dropLast(3)); groups.insert(n); q4.insert(n) } else { groups.insert(g) }
-        }
+        w.metadata["quantized_groups"] = groups.sorted().joined(separator: ",")
         if groups.contains("head") {
             let name = "language_model.model.embed_tokens.weight"
             let e = f.entries[name]!
@@ -164,22 +159,7 @@ extension WeightConverter {
         var nq = 0, bytes = 0
         for name in f.entries.keys.sorted() where !name.hasPrefix("__pad_") {
             let e = f.entries[name]!
-            if let g = group(name), groups.contains(g), q4.contains(g) {
-                let rows = e.shape[0], cols = e.shape.dropFirst().reduce(1, *)
-                var cache: (packed: [UInt8], scale: [Float16])?
-                func get() throws -> (packed: [UInt8], scale: [Float16]) {
-                    if let c = cache { return c }
-                    let x = try f.floats(name)
-                    cache = x.withUnsafeBufferPointer { Quant.quantizeRowsQ4($0, rows: rows, cols: cols) }
-                    return cache!
-                }
-                w.addLazy(name, dtype: .u8, shape: [rows, cols / 2], bytes: rows * cols / 2) { try get().packed.withUnsafeBytes { Data($0) } }
-                w.addLazy(name + ".q4scale", dtype: .f16, shape: [rows, cols / 64], bytes: rows * cols / 64 * 2) {
-                    let d = try get().scale.withUnsafeBytes { Data($0) }; cache = nil; return d
-                }
-                nq += 1
-                bytes += rows * cols / 2 + rows * cols / 32
-            } else if let g = group(name), groups.contains(g) {
+            if let g = group(name), groups.contains(g) {
                 let rows = e.shape[0], cols = e.shape.dropFirst().reduce(1, *)
                 var cache: (q: [Int8], scale: [Float])?
                 func get() throws -> (q: [Int8], scale: [Float]) {

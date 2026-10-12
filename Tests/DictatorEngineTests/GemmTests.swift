@@ -45,7 +45,8 @@ final class GemmTests: XCTestCase {
     }
 
     func testMixedDtypes() {
-        let combos: [(DType, DType, DType)] = [(.f16, .f16, .f16), (.f32, .f16, .f32), (.f16, .f16, .f32), (.f32, .bf16, .f32)]
+        // The combinations the models use: f32 activations with f32, f16 or bf16 weights.
+        let combos: [(DType, DType, DType)] = [(.f32, .f16, .f32), (.f32, .bf16, .f32), (.f32, .bf16, .f16)]
         for (da, db, dc) in combos {
             for (M, N, K) in shapes {
                 // Reference uses the same rounded inputs, so only accumulation/output rounding differs.
@@ -68,7 +69,7 @@ final class GemmTests: XCTestCase {
         let bias = randomFloats(N, seed: 7), res = randomFloats(M * N, seed: 8)
         let ta = Tensor.from(a, shape: [M, K]), tb = Tensor.from(b, shape: [N, K])
         let tbias = Tensor.from(bias, shape: [N]), tres = Tensor.from(res, shape: [M, N])
-        for act in [Activation.none, .relu, .silu, .geluTanh, .geluErf] {
+        for act in [Activation.none, .relu, .silu, .geluErf] {
             let tc = Tensor(shape: [M, N])
             let s = Step()
             s.gemm(ta, tb, bias: tbias, out: tc, act: act, alpha: 0.5, outScale: 0.25, residual: tres, resScale: 2)
@@ -81,7 +82,6 @@ final class GemmTests: XCTestCase {
                 case .none: break
                 case .relu: v = max(v, 0)
                 case .silu: v = v / (1 + exp(-v))
-                case .geluTanh: v = 0.5 * v * (1 + tanh(0.7978845608 * (v + 0.044715 * v * v * v)))
                 case .geluErf: v = 0.5 * v * (1 + erf(v / 2.0.squareRoot().float))
                 }
                 ref[i * N + j] = 0.25 * v + 2 * res[i * N + j]

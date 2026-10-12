@@ -6,13 +6,14 @@ final class VoxtralOpTests: XCTestCase {
     func testAttentionGQAMultiBlock() {
         // 1200 keys spans three online-softmax blocks; 8 query heads share 2 kv heads.
         let (Tq, Tk, Hq, Hkv, d) = (3, 1200, 8, 2, 64)
-        let q = randomFloats(Tq * Hq * d, seed: 51), k = randomFloats(Tk * Hkv * d, seed: 52), v = randomFloats(Tk * Hkv * d, seed: 53)
+        // K/V caches are f16; the reference uses the same rounded values.
+        let q = randomFloats(Tq * Hq * d, seed: 51), k = roundTrip(randomFloats(Tk * Hkv * d, seed: 52), .f16), v = roundTrip(randomFloats(Tk * Hkv * d, seed: 53), .f16)
         let ranges: [Int32] = [0, 1200, 450, 1100, 700, 701]
         let rt = Tensor(shape: [Tq, 2], dtype: .i32)
         ranges.withUnsafeBytes { rt.contents.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
         let out = Tensor(shape: [Tq, Hq * d])
         let s = Step()
-        s.attention(q: Tensor.from(q, shape: [Tq, Hq * d]), k: Tensor.from(k, shape: [Tk, Hkv * d]), v: Tensor.from(v, shape: [Tk, Hkv * d]),
+        s.attention(q: Tensor.from(q, shape: [Tq, Hq * d]), k: Tensor.from(k, shape: [Tk, Hkv * d], dtype: .f16), v: Tensor.from(v, shape: [Tk, Hkv * d], dtype: .f16),
                     ranges: rt, out: out, heads: Hq, kvHeads: Hkv, headDim: d)
         s.run()
         var ref = [Float](repeating: 0, count: Tq * Hq * d)
@@ -45,7 +46,7 @@ final class VoxtralOpTests: XCTestCase {
         let ranges: [Int32] = [0, 697, 1, 698, 2, 699, 3, 700]
         let rt = Tensor(shape: [Tq, 2], dtype: .i32)
         ranges.withUnsafeBytes { rt.contents.copyMemory(from: $0.baseAddress!, byteCount: $0.count) }
-        let qt = Tensor.from(q, shape: [Tq, H * d]), kt = Tensor.from(k, shape: [Tk, H * d]), vt = Tensor.from(v, shape: [Tk, H * d])
+        let qt = Tensor.from(q, shape: [Tq, H * d]), kt = Tensor.from(k, shape: [Tk, H * d], dtype: .f16), vt = Tensor.from(v, shape: [Tk, H * d], dtype: .f16)
         let a = Tensor(shape: [Tq, H * d]), b = Tensor(shape: [Tq, H * d])
         var s = Step(); s.attention(q: qt, k: kt, v: vt, ranges: rt, out: a, heads: H, kvHeads: H, headDim: d); s.run()
         // Reference: one query at a time (single-query kernel path).

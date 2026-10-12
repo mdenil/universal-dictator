@@ -69,9 +69,7 @@ kernel void rms_norm(device const T* x [[buffer(0)]],
 }
 
 template [[host_name("layer_norm_f32")]] kernel void layer_norm<float>(device const float*, device const float*, device const float*, device float*, constant NormParams&, uint, uint, uint);
-template [[host_name("layer_norm_f16")]] kernel void layer_norm<half>(device const half*, device const float*, device const float*, device half*, constant NormParams&, uint, uint, uint);
 template [[host_name("rms_norm_f32")]] kernel void rms_norm<float>(device const float*, device const float*, device const float*, device float*, constant NormParams&, uint, uint, uint);
-template [[host_name("rms_norm_f16")]] kernel void rms_norm<half>(device const half*, device const float*, device const float*, device half*, constant NormParams&, uint, uint, uint);
 
 // ---------------------------------------------------------------- GLU over channels
 // in [T, 2D] -> out[t, d] = in[t, d] * sigmoid(in[t, D + d])
@@ -85,7 +83,6 @@ kernel void glu(device const T* x [[buffer(0)]], device T* out [[buffer(1)]],
     out[(long)t * D + d] = from_f<T>(a / (1.0f + exp(-b)));
 }
 template [[host_name("glu_f32")]] kernel void glu<float>(device const float*, device float*, constant int&, uint2);
-template [[host_name("glu_f16")]] kernel void glu<half>(device const half*, device half*, constant int&, uint2);
 
 // ---------------------------------------------------------------- depthwise conv1d over time
 // in [Tin, D] with Tin = Tout + K - 1 (caller supplies left context / padding rows).
@@ -103,7 +100,6 @@ kernel void dwconv1d(device const T* x [[buffer(0)]], device const float* w [[bu
     out[(long)t * p.D + d] = from_f<T>(apply_act(acc, p.act));
 }
 template [[host_name("dwconv1d_f32")]] kernel void dwconv1d<float>(device const float*, device const float*, device const float*, device float*, constant DWConvParams&, uint2);
-template [[host_name("dwconv1d_f16")]] kernel void dwconv1d<half>(device const half*, device const float*, device const float*, device half*, constant DWConvParams&, uint2);
 
 // ---------------------------------------------------------------- conv2d, channel-last, 3x3-ish
 // in [Hin, Win, Cin], w [Cout, Cin/groups, KH, KW] (torch layout), out [Hout, Wout, Cout].
@@ -222,33 +218,12 @@ kernel void relpos_attention(device const T* Q [[buffer(0)]], device const T* K 
     }
 }
 template [[host_name("relpos_attention_f32")]] kernel void relpos_attention<float>(device const float*, device const float*, device const float*, device const float*, device const float*, device const float*, device const int2*, device float*, constant RelAttnParams&, uint2, uint, uint2);
-template [[host_name("relpos_attention_f16")]] kernel void relpos_attention<half>(device const half*, device const half*, device const half*, device const half*, device const float*, device const float*, device const int2*, device half*, constant RelAttnParams&, uint2, uint, uint2);
 
 // ---------------------------------------------------------------- misc elementwise
-template <typename T>
-kernel void add_scaled(device const T* a [[buffer(0)]], device const T* b [[buffer(1)]], device T* out [[buffer(2)]],
-                       constant float& sb [[buffer(3)]], uint i [[thread_position_in_grid]]) {
-    out[i] = from_f<T>(to_f(a[i]) + sb * to_f(b[i]));
-}
-template [[host_name("add_scaled_f32")]] kernel void add_scaled<float>(device const float*, device const float*, device float*, constant float&, uint);
-template [[host_name("add_scaled_f16")]] kernel void add_scaled<half>(device const half*, device const half*, device half*, constant float&, uint);
-
-kernel void scale_f32(device const float* a [[buffer(0)]], device float* out [[buffer(1)]],
-                      constant float& s [[buffer(2)]], uint i [[thread_position_in_grid]]) {
-    out[i] = a[i] * s;
-}
-
 // Copy `n` elements (in 4-byte words) between buffers; used for cache shifts and gathers.
 kernel void copy_words(device const uint* src [[buffer(0)]], device uint* dst [[buffer(1)]],
                        uint i [[thread_position_in_grid]]) {
     dst[i] = src[i];
-}
-
-kernel void cast_f32_f16(device const float* a [[buffer(0)]], device half* out [[buffer(1)]], uint i [[thread_position_in_grid]]) {
-    out[i] = half(a[i]);
-}
-kernel void cast_f16_f32(device const half* a [[buffer(0)]], device float* out [[buffer(1)]], uint i [[thread_position_in_grid]]) {
-    out[i] = float(a[i]);
 }
 
 kernel void fill_zero_words(device uint* dst [[buffer(0)]], uint i [[thread_position_in_grid]]) {

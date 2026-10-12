@@ -56,8 +56,6 @@ public final class MetalNemotronEncoder: NemotronEncoder {
     let melIn: Tensor
     let encOut: Tensor
     let proj: Tensor
-    /// GPU seconds per step (for benchmarking).
-    public private(set) var gpuTimes: [Double] = []
     /// Receives the kept encoder output rows of each chunk (parity testing).
     public var encTap: (([Float]) -> Void)?
 
@@ -86,7 +84,7 @@ public final class MetalNemotronEncoder: NemotronEncoder {
         if keep > 0 {
             s.gemm(encOut.rows(0, keep), model.jointEncW, bias: model.jointEncB, out: proj.rows(0, keep))
         }
-        gpuTimes.append(s.run())
+        s.run()
         guard keep > 0 else { return ([], 0) }
         if let tap = encTap { tap(encOut.rows(0, keep).toFloats()) }
         return (proj.rows(0, keep).toFloats(), keep)
