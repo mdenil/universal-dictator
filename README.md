@@ -6,7 +6,7 @@ Dictation into any app on your Mac. Double-tap Right Shift and talk: your words 
 ![macOS 15+ on Apple silicon](https://img.shields.io/badge/macOS-15%2B%20%C2%B7%20Apple%20silicon-lightgrey)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
-https://github.com/user-attachments/assets/58b69222-13a1-456b-970a-751fd4f2465c
+https://github.com/user-attachments/assets/28cc3a3e-44f4-4e2c-8f1f-1d447ba27f49
 
 Universal Dictator works wherever you can type: email, chat, documents, the browser, a code editor. Put the cursor in a text field, double-tap Right Shift, and talk. Each word appears at the cursor about 0.3 seconds after you say it, as if you'd typed it yourself. Tap Right Shift again to stop.
 
