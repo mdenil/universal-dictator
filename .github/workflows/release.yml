@@ -1,7 +1,7 @@
 # Builds the Mac app for a version tag (v1.2.3, or v1.2.3-rc1 for a pre-release) and publishes it as a
 # GitHub release: UniversalDictator-<version>.dmg and its SHA-256. The plan is plans/RELEASE_BUILDS_PLAN.md.
 #
-# The app's model folder (build/app-assets) is made from nothing, as README's "Building the app" does, and
+# The app's model folder (build/app-assets) is made from nothing, as docs/DEVELOPMENT.md's "Building the app" does, and
 # cached on everything that produces it, so a release that changes none of that goes straight to xcodebuild.
 # The app is signed ad hoc (App/Signing.xcconfig).
 
@@ -94,7 +94,7 @@ jobs:
           cat > notes.md <<'EOF'
           **Installing:** open the DMG and drag Universal Dictator onto Applications. The app needs an Apple-silicon Mac with macOS 15 or later.
 
-          **The first time you open it,** macOS refuses, because the app isn't notarized by Apple. Open System Settings › Privacy & Security, scroll to the message about Universal Dictator, and click **Open Anyway**. The app then asks for the microphone, and for Accessibility (used to type dictated text into other apps). After an update macOS asks for both again.
+          **The first time you open it,** macOS refuses, because the app isn't notarized by Apple. Open System Settings › Privacy & Security, scroll to the message about Universal Dictator, and click **Open Anyway**. The app then asks for the microphone, and for Accessibility (used to type dictated text into other apps). After an update, Open Anyway is needed again, macOS may ask for the microphone again, and Accessibility has to be allowed again: see Troubleshooting in the README.
 
           The app contains NVIDIA's Nemotron Speech Streaming model: Licensed by NVIDIA Corporation under the NVIDIA Open Model License. The license texts are in the DMG's Licenses folder and inside the app.
           EOF
