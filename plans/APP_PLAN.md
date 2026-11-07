@@ -91,7 +91,6 @@ Each of these gets planned when we get to it:
 
 - a global keyboard shortcut and push-to-talk;
 - pasting directly into the frontmost app;
-- launch at login;
 - a history of past dictations;
 - release builds on GitHub Actions (`xcodebuild archive`, signing, notarization), with models downloaded on first launch instead of bundled;
 - Parakeet on the Neural Engine (a Core ML port), so it can join the model menu.

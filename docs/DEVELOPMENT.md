@@ -35,6 +35,8 @@ open build/DerivedData/Build/Products/Release/UniversalDictator.app
 
 The app is signed to run on this Mac only (ad hoc), which needs no Apple account. macOS then treats each rebuild as a new app and asks for the Accessibility permission again. To sign with your own Apple Development certificate instead, which keeps the permissions, see `App/Signing.xcconfig`.
 
+**Open at login** registers the copy of the app it is switched on in. Switched on in a build in `build/DerivedData`, it opens that build at login, not the copy in Applications; switch it off there before relying on the installed app.
+
 The app links only `DictatorCore` (no Metal); its dictation logic is in `App/Kit`, and its plans are in `plans/`. The design is in Figma ([Universal Dictator — App UI](https://www.figma.com/design/RYBeO9fxHFk9C7WMtVS6Tl)).
 
 Checks without clicking through the app:
@@ -45,6 +47,7 @@ $APP --selftest /path/to/audio.flac --model nemotron160    # the app's controlle
                                                             # reopens the panel, edits the paused text and resumes
 $APP --snapshot /tmp/panel-states                          # renders every panel state, Settings and History to PNG
 $APP --measure-switch                                      # model load and switch times, and memory
+$APP --check-login-item                                    # whether this copy opens at login, and its path
 $APP --direct-selftest /path/to/audio.flac                  # direct dictation into a test window; PASS if it holds the final text
 .build/release/dictate-cli dictate audio.flac --pause-at 5  # the app's code path from the command line
 ```

@@ -46,7 +46,7 @@ The app has no Dock icon: look for the waveform icon in the menu bar, next to th
 
 The first time it starts, the app spends about 20 seconds preparing the speech model. If you use the shortcut meanwhile, the panel opens with "Getting things ready for you…" and starts listening by itself when it's ready. After that, the app starts in under a second.
 
-**To start it when you log in,** add it in System Settings › General › Login Items.
+**To start it when you log in,** switch on **Open at login** in Settings.
 
 ## Usage
 
@@ -91,6 +91,7 @@ Right-click the menu bar icon and choose **Settings…**, or press **⌘,** whil
 
 | Setting | Choices |
 |---|---|
+| Open at login | Starts the app when you log in to your Mac. It's listed in System Settings › General › Login Items too; switching it off in either place turns it off. |
 | Shortcut | **Double tap** of a modifier key (Left or Right ⇧ ⌃ ⌥ ⌘), or a **Key combination** such as ⌃A or ⌘⇧D. Combinations that would get in the way of normal typing or standard commands show a warning. |
 | Mode | **Toggle** or **Push to talk**. |
 | Accessibility | Whether typing into other apps is allowed, with a button to allow it. |
@@ -105,6 +106,7 @@ Because the app isn't notarized, macOS treats each version as a new app:
 - **Open Anyway** is needed again, as when you first installed it.
 - macOS may ask for the **microphone** again.
 - **Accessibility** has to be allowed again; see [Troubleshooting](#troubleshooting).
+- If **Open at login** is off in Settings, switch it on again.
 - The speech model is prepared again at the first launch (about 20 seconds).
 
 ## Privacy

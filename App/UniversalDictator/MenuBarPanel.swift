@@ -120,7 +120,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
 
     @objc func showSettings() {
         if settingsWindow == nil {
-            settingsWindow = Self.window(title: "Settings", content: SettingsView(controller: controller, direct: direct), resizable: false)
+            settingsWindow = Self.window(title: "Settings", content: SettingsView(controller: controller, direct: direct, loginItem: LoginItem()), resizable: false)
         }
         present(settingsWindow!)
     }

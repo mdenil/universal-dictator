@@ -7,6 +7,7 @@ import UniversalDictatorKit
 struct SettingsView: View {
     @Bindable var controller: DictationController
     @Bindable var direct: DirectSettings
+    var loginItem: LoginItem
     @State var confirmingClear = false
     /// Key combination chosen but none recorded yet: the field records straight away.
     @State var choosingCombination = false
@@ -35,6 +36,24 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            row("Open at login") {
+                switch loginItem.state {
+                case .off, .on:
+                    Toggle("Open at login", isOn: Binding(get: { loginItem.state == .on }, set: { loginItem.set($0) }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                case .needsApproval:
+                    Button("Allow…") { loginItem.openSystemSettings() }
+                        .help("Switched off in System Settings › General › Login Items.")
+                case .temporaryCopy:
+                    Text("Move the app to Applications first").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+            if let failure = loginItem.failure {
+                Text(failure).font(.system(size: 11)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            Divider()
             row("Model") {
                 Picker("Model", selection: Binding(get: { controller.model }, set: { choice in
                     controller.selectModel(choice)
@@ -100,6 +119,9 @@ struct SettingsView: View {
         }
         // Recording ended: the menu follows the shortcut in force (a cancelled first recording leaves the double tap).
         .onChange(of: direct.isRecording) { if !direct.isRecording { choosingCombination = false } }
+        // Login Items can change in System Settings while this window is open.
+        .onAppear { loginItem.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in loginItem.refresh() }
         .padding(.horizontal, 24)
         .padding(.vertical, 22)
         .frame(width: 360)

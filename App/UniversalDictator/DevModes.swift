@@ -14,6 +14,9 @@ import UniversalDictatorKit
 //       the Neural Engine compile already cached on disk.
 //   UniversalDictator --check-accessibility
 //       prints whether this app may type into other apps, and exits.
+//   UniversalDictator --check-login-item
+//       prints whether this copy of the app opens at login (on, off, needsApproval, temporaryCopy) and
+//       where it is, and exits.
 //   UniversalDictator --direct-selftest <audio> [--model nemotron160|nemotron560]
 //       direct dictation of <audio> into a test window of its own, through the real model and real typing;
 //       prints PASS if the window holds exactly the dictation's final text and a space. Needs Accessibility.
@@ -32,6 +35,10 @@ enum DevModes {
             let choice = argument(after: "--model").flatMap(ModelChoice.init(rawValue:)) ?? .nemotron160
             Task { await selftest(audio: URL(fileURLWithPath: audio), choice: choice, assets: assets); exit(0) }
             return true
+        }
+        if CommandLine.arguments.contains("--check-login-item") {
+            print("\(LoginItem.current()) (\(Bundle.main.bundleURL.path))")
+            exit(0)
         }
         if CommandLine.arguments.contains("--check-accessibility") {
             print(AXIsProcessTrusted() ? "allowed" : "not allowed")
@@ -267,13 +274,16 @@ enum DevModes {
         h.loadModel(); await settle()
         let scratch = UserDefaults(suiteName: "dev.universaldictator.snapshot")!
         scratch.removePersistentDomain(forName: "dev.universaldictator.snapshot")
-        render(SettingsView(controller: h, direct: DirectSettings(defaults: scratch)), "7-settings", dir, background: false)
+        render(SettingsView(controller: h, direct: DirectSettings(defaults: scratch), loginItem: LoginItem(fixed: .on)), "7-settings", dir,
+               background: false)
+        render(SettingsView(controller: h, direct: DirectSettings(defaults: scratch), loginItem: LoginItem(fixed: .temporaryCopy)),
+               "7b-settings-temporary-copy", dir, background: false)
         await h.panelOpened(); h.pause(); await settle()
-render(SettingsView(controller: h, direct: DirectSettings(defaults: scratch)), "8-settings-paused", dir, background: false)
+        render(SettingsView(controller: h, direct: DirectSettings(defaults: scratch), loginItem: LoginItem(fixed: .off)), "8-settings-paused", dir, background: false)
         let combo = DirectSettings(defaults: scratch)
         combo.shortcut = .combination(keyCode: 0, carbonModifiers: 0x0200, display: "⇧A")
         combo.mode = .pushToTalk
-        render(SettingsView(controller: h, direct: combo), "8b-settings-combination", dir, background: false)
+        render(SettingsView(controller: h, direct: combo, loginItem: LoginItem(fixed: .needsApproval)), "8b-settings-combination", dir, background: false)
         scratch.removePersistentDomain(forName: "dev.universaldictator.snapshot")
         render(HistoryView(controller: h).frame(width: 520, height: 400), "9-history", dir, background: false)
         let second = h.history[1]
