@@ -59,7 +59,7 @@ Put the cursor in a text field in any app and **double-tap Right Shift**. A shor
 
 Stopping types the last word and a space. Clicking the menu bar icon also stops it.
 
-Nothing is ever typed into password fields, or into apps using secure keyboard entry (such as Terminal with that option turned on).
+Dictation never starts in a password field. The menu bar icon shows a warning triangle with a short note under it instead.
 
 ### The panel
 
@@ -122,8 +122,8 @@ The app isn't notarized. Use **Open Anyway** in System Settings › Privacy & Se
 **The shortcut opens the panel saying "Typing in other apps is off"**
 Accessibility isn't allowed. Click **Open System Settings** and switch on Universal Dictator under Accessibility. If it's already listed and switched on, the entry is from an earlier version: select it, remove it with **−**, then add the app back with **+** and switch it on.
 
-**The shortcut only flashes a warning triangle on the menu bar icon**
-Some app has secure keyboard entry turned on, which stops any app from typing: a password field has the focus, or an app such as Terminal has Secure Keyboard Entry switched on in its menu. Move to an ordinary text field, or turn that option off.
+**The shortcut shows "Refusing to dictate into a password field"**
+A password field has the focus. Click in an ordinary text field and use the shortcut again.
 
 **Nothing appears when I talk**
 Check that Universal Dictator is allowed in System Settings › Privacy & Security › Microphone, and that the right microphone is selected in System Settings › Sound › Input.

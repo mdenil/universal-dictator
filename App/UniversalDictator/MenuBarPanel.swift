@@ -184,11 +184,16 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
     }
 
     func startDirect() {
-        if KeyboardTyper.secureInputIsOn {
-            log.notice("direct dictation: secure input is on, not starting")
-            item.button?.image = Self.symbol("exclamationmark.triangle", color: nil)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.updateIcon() }
+        if KeyboardTyper.passwordFieldIsFocused {
+            log.notice("direct dictation: a password field is focused, not starting")
+            showHint("Refusing to dictate into a password field")
             return
+        }
+        hideHint()
+        if KeyboardTyper.secureInputIsOn {
+            let pid = KeyboardTyper.secureInputHolder
+            let name = pid.flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName } ?? "unknown"
+            log.notice("direct dictation: secure input is on (held by \(name, privacy: .public), pid \(pid ?? -1)), starting anyway")
         }
         if panel.isVisible { close() }
         Task {
@@ -208,13 +213,50 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
         }
     }
 
+    // MARK: Hint
+
+    /// A one-line message under the icon, such as why the shortcut did nothing.
+    let hint = HintPanel()
+    var hintHide: DispatchWorkItem?
+
+    /// Shows `text` under the icon, with the warning triangle on the icon, for 3 seconds. It takes neither
+    /// focus nor clicks, so the cursor stays where it was.
+    func showHint(_ text: String) {
+        let content = NSHostingView(rootView: HintView(text: text))
+        var size = content.fittingSize
+        if size.width < 40 || size.height < 20 { size = NSSize(width: 280, height: 34) }
+        content.frame = NSRect(origin: .zero, size: size)
+        hint.contentView = PanelBackground(content: content)
+        guard let frame = frameUnderIcon(size: size) else { return }
+        hint.setFrame(frame, display: true)
+        hint.orderFrontRegardless()
+        item.button?.image = Self.symbol("exclamationmark.triangle", color: nil)
+        hintHide?.cancel()
+        let hide = DispatchWorkItem { [weak self] in self?.hideHint() }
+        hintHide = hide
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: hide)
+    }
+
+    func hideHint() {
+        hintHide?.cancel()
+        hintHide = nil
+        guard hint.isVisible else { return }
+        hint.orderOut(nil)
+        updateIcon()
+    }
+
     /// Where the panel goes: under the menu-bar icon, inside the screen.
     func panelFrame() -> NSRect? {
-        guard let button = item.button, let window = button.window else { return nil }
-        let iconFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
         // The SwiftUI content's own size (the material view around it reports zero).
         var size = host.fittingSize
         if size.width < 100 || size.height < 100 { size = NSSize(width: 360, height: 238) }
+        return frameUnderIcon(size: size)
+    }
+
+    /// A window of `size` centred under the menu-bar icon, inside the screen.
+    func frameUnderIcon(size: NSSize) -> NSRect? {
+        guard let button = item.button, let window = button.window else { return nil }
+        let iconFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
         let screen = window.screen?.visibleFrame ?? NSScreen.main!.visibleFrame
         var x = iconFrame.midX - size.width / 2
         x = min(max(x, screen.minX + 8), screen.maxX - size.width - 8)
@@ -223,6 +265,7 @@ final class MenuBarPanel: NSObject, NSWindowDelegate {
 
     func open(startDictation: Bool = true) {
         guard let frame = panelFrame(), frame.width > 0, frame.height > 0 else { log.error("open: no usable frame"); return }
+        hideHint()
         let t0 = Date()
         log.notice("open at \(String(describing: frame), privacy: .public)")
         panel.setFrame(frame, display: true)
@@ -330,6 +373,35 @@ final class DropDownPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
     }
     override var canBecomeKey: Bool { true }
+}
+
+/// A borderless panel for the hint under the icon: shown without activating the app, never key, and
+/// clicks pass through it.
+final class HintPanel: NSPanel {
+    init() {
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        isFloatingPanel = true
+        level = .popUpMenu
+        hasShadow = true
+        backgroundColor = .clear
+        isOpaque = false
+        ignoresMouseEvents = true
+        hidesOnDeactivate = false
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
+    }
+    override var canBecomeKey: Bool { false }
+}
+
+/// The hint's content: a warning triangle and one line of text.
+struct HintView: View {
+    let text: String
+    var body: some View {
+        Label(text, systemImage: "exclamationmark.triangle")
+            .font(.callout)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .fixedSize()
+    }
 }
 
 /// The menu material with rounded corners behind the SwiftUI content, resizing with it.

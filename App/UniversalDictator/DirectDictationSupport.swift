@@ -45,8 +45,24 @@ final class KeyboardTyper: TextTyper, @unchecked Sendable {
         }
     }
 
-    /// Whether macOS is blocking typed events (a password field, or "secure keyboard entry").
+    /// Whether some process has turned on macOS secure input (a password field, or "secure keyboard entry").
+    /// It is system-wide and does not stop these typed events reaching the focused app.
     static var secureInputIsOn: Bool { IsSecureEventInputEnabled() }
+
+    /// The process that turned secure input on, from the login session's record.
+    static var secureInputHolder: pid_t? {
+        ((CGSessionCopyCurrentDictionary() as? [String: Any])?["kCGSSessionSecureInputPID"] as? NSNumber)?.int32Value
+    }
+
+    /// Whether the focused element is a password field. Needs Accessibility; false without it.
+    static var passwordFieldIsFocused: Bool {
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+              let focused else { return false }
+        var subrole: CFTypeRef?
+        AXUIElementCopyAttributeValue(focused as! AXUIElement, kAXSubroleAttribute as CFString, &subrole)
+        return subrole as? String == kAXSecureTextFieldSubrole as String
+    }
 }
 
 struct SystemAccessibility: AccessibilityPermission {

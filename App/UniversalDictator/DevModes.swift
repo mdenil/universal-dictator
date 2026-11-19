@@ -258,6 +258,7 @@ enum DevModes {
         (c, _) = make(granted: false); c.loadModel(); await settle(); await c.panelOpened(); render(c, "5-microphone-denied", dir)
         (c, _) = make(fail: true); c.loadModel(); await settle(); render(c, "6-failed", dir)
         (c, _) = make(); c.loadModel(); await settle(); c.showAccessibilityNeeded(); render(c, "6b-accessibility-needed", dir)
+        render(HintView(text: "Refusing to dictate into a password field"), "6c-hint-password-field", dir, background: true)
 
         // Settings and History, with a few saved dictations.
         let now = Date()
