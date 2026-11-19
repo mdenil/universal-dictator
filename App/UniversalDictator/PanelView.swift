@@ -14,6 +14,13 @@ struct PanelView: View {
 
     var isEditable: Bool { controller.phase == .paused || controller.phase == .done }
 
+    /// The Privacy & Security list of apps that may control the Mac: "Device Control and Data Access" from
+    /// macOS 27, "Accessibility" before it.
+    static var accessibilityPaneName: String {
+        if #available(macOS 27, *) { return "Device Control and Data Access" }
+        return "Accessibility"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
@@ -91,7 +98,7 @@ struct PanelView: View {
             VStack(spacing: 8) {
                 Image(systemName: "keyboard").font(.system(size: 22)).foregroundStyle(.secondary)
                 Text("Typing in other apps is off").font(.system(size: 13, weight: .semibold))
-                Text("Turn on Universal Dictator in System Settings › Privacy & Security › Accessibility to use the dictation shortcut.")
+                Text("Turn on Universal Dictator in System Settings › Privacy & Security › \(Self.accessibilityPaneName) to use the dictation shortcut.")
                     .font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             .padding(14)
