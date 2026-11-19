@@ -120,7 +120,7 @@ Because the app isn't notarized, macOS treats each version as a new app:
 The app isn't notarized. Use **Open Anyway** in System Settings › Privacy & Security, as in [Installation](#installation).
 
 **The shortcut opens the panel saying "Typing in other apps is off"**
-Accessibility isn't allowed. Click **Open System Settings** and switch on Universal Dictator under Accessibility. If it's already listed and switched on, the entry is from an earlier version: select it, remove it with **−**, then add the app back with **+** and switch it on.
+Accessibility isn't allowed. Click **Open System Settings** and switch on Universal Dictator in the list it opens: **Accessibility**, called **Device Control and Data Access** on macOS 27. If it's already listed and switched on, the entry is from an earlier version: select it, remove it with **−**, then add the app back with **+** and switch it on.
 
 **The shortcut shows "Refusing to dictate into a password field"**
 A password field has the focus. Click in an ordinary text field and use the shortcut again.
@@ -139,7 +139,7 @@ Quit the app (right-click the icon › Quit) and move it from Applications to th
 - `~/Library/Caches/dev.universaldictator.UniversalDictator`
 - `~/Library/Preferences/dev.universaldictator.UniversalDictator.plist`
 
-and remove it from the Microphone and Accessibility lists in System Settings › Privacy & Security.
+and remove it from the Microphone and Accessibility lists in System Settings › Privacy & Security (on macOS 27, Accessibility is called Device Control and Data Access).
 
 ## Building from source
 
